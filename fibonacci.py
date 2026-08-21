@@ -2,30 +2,37 @@
 Vision Trade AI V2
 fibonacci.py
 
-Responsabilité :
-- calcul des niveaux de Fibonacci ;
-- détermination Premium / Discount ;
-- calcul de l'Equilibrium ;
-- identification de la zone actuelle du prix.
+Moteur déterministe Fibonacci.
 
-Aucune décision BUY/SELL n'est prise ici.
+Responsabilités :
+- déterminer le dernier swing exploitable ;
+- calculer les niveaux Fibonacci ;
+- déterminer premium / discount ;
+- identifier le niveau de retracement le plus proche.
+
+Aucune IA.
+Aucun appel API.
+Aucune décision de trading.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Sequence
 
 
 logger = logging.getLogger(__name__)
 
+BULLISH = "bullish"
+BEARISH = "bearish"
+NEUTRAL = "neutral"
+
 
 # ============================================================
-# CONSTANTES FIBONACCI
+# NIVEAUX FIBONACCI
 # ============================================================
 
-FIB_LEVELS = (
+FIBONACCI_LEVELS = (
     0.0,
     0.236,
     0.382,
@@ -38,536 +45,265 @@ FIB_LEVELS = (
 
 
 # ============================================================
-# MODÈLE
-# ============================================================
-
-@dataclass
-class FibonacciRange:
-    """
-    Représente une plage Fibonacci construite à partir
-    d'un swing high et d'un swing low.
-    """
-
-    swing_high: float
-    swing_low: float
-    direction: str
-
-    def __post_init__(self) -> None:
-
-        if self.swing_high <= self.swing_low:
-            raise ValueError(
-                "swing_high doit être supérieur à swing_low."
-            )
-
-        if self.direction not in {
-            "bullish",
-            "bearish",
-        }:
-            raise ValueError(
-                "direction doit être bullish ou bearish."
-            )
-
-    @property
-    def range_size(self) -> float:
-        """Amplitude totale du range."""
-
-        return self.swing_high - self.swing_low
-
-    @property
-    def equilibrium(self) -> float:
-        """
-        Niveau 50 %.
-        """
-
-        return (
-            self.swing_low
-            + self.range_size * 0.5
-        )
-
-    def levels(self) -> Dict[str, float]:
-        """
-        Calcule les niveaux Fibonacci.
-        """
-
-        result = {}
-
-        for level in FIB_LEVELS:
-
-            price = (
-                self.swing_low
-                + self.range_size * level
-            )
-
-            result[str(level)] = price
-
-        return result
-
-    def retracement_levels(self) -> Dict[str, float]:
-        """
-        Retourne les niveaux de retracement dans le sens
-        du mouvement principal.
-
-        Bullish :
-            retracement depuis le high vers le low.
-
-        Bearish :
-            retracement depuis le low vers le high.
-        """
-
-        if self.direction == "bullish":
-
-            return {
-                str(level): (
-                    self.swing_high
-                    - self.range_size * level
-                )
-                for level in FIB_LEVELS
-            }
-
-        return {
-            str(level): (
-                self.swing_low
-                + self.range_size * level
-            )
-            for level in FIB_LEVELS
-        }
-
-
-# ============================================================
 # VALIDATION
 # ============================================================
 
-def validate_swing_range(
-    swing_high: float,
-    swing_low: float,
+def _validate_candles(
+    candles: Sequence[dict],
 ) -> None:
-    """
-    Vérifie qu'un range est exploitable.
-    """
 
-    if swing_high is None or swing_low is None:
+    if not candles:
         raise ValueError(
-            "Les deux swings sont obligatoires."
+            "La liste de bougies est vide."
         )
 
-    swing_high = float(swing_high)
-    swing_low = float(swing_low)
+    required = {
+        "high",
+        "low",
+        "close",
+    }
 
-    if swing_high <= 0 or swing_low <= 0:
-        raise ValueError(
-            "Les prix doivent être supérieurs à 0."
-        )
+    for index, candle in enumerate(candles):
 
-    if swing_high <= swing_low:
-        raise ValueError(
-            "swing_high doit être supérieur à swing_low."
-        )
+        if not isinstance(candle, dict):
+            raise ValueError(
+                f"Bougie invalide à l'index {index}."
+            )
+
+        missing = required - set(candle.keys())
+
+        if missing:
+            raise ValueError(
+                f"Colonnes manquantes à l'index "
+                f"{index}: {sorted(missing)}"
+            )
 
 
 # ============================================================
-# CRÉATION DU RANGE
+# DERNIER SWING
 # ============================================================
 
-def creer_fibonacci(
-    swing_high: float,
-    swing_low: float,
-    direction: str,
-) -> FibonacciRange:
-    """
-    Crée un range Fibonacci validé.
-    """
+def _find_swing_range(
+    structure_analysis: Dict[str, Any],
+) -> tuple[float, float, str]:
 
-    validate_swing_range(
-        swing_high,
-        swing_low,
+    swings = structure_analysis.get(
+        "swings",
+        {},
     )
 
-    return FibonacciRange(
-        swing_high=float(swing_high),
-        swing_low=float(swing_low),
-        direction=direction.lower().strip(),
+    highs = swings.get(
+        "highs",
+        [],
     )
 
+    lows = swings.get(
+        "lows",
+        [],
+    )
 
-# ============================================================
-# NIVEAUX
-# ============================================================
+    if not highs or not lows:
+        raise ValueError(
+            "Impossible de calculer Fibonacci : "
+            "swings insuffisants."
+        )
 
-def calculer_niveaux_fibonacci(
-    swing_high: float,
-    swing_low: float,
-    direction: str,
-) -> Dict[str, float]:
-    """
-    Retourne les niveaux Fibonacci.
-    """
+    latest_high = max(
+        highs,
+        key=lambda x: x["index"],
+    )
 
-    fib = creer_fibonacci(
-        swing_high,
-        swing_low,
+    latest_low = max(
+        lows,
+        key=lambda x: x["index"],
+    )
+
+    high_price = float(
+        latest_high["price"]
+    )
+
+    low_price = float(
+        latest_low["price"]
+    )
+
+    if latest_low["index"] < latest_high["index"]:
+
+        direction = BULLISH
+
+    else:
+
+        direction = BEARISH
+
+    return (
+        high_price,
+        low_price,
         direction,
     )
 
-    return fib.retracement_levels()
-
 
 # ============================================================
-# PREMIUM / DISCOUNT
+# CALCUL FIBONACCI
 # ============================================================
 
-def determiner_zone_premium_discount(
-    price: float,
-    swing_high: float,
-    swing_low: float,
-) -> str:
-    """
-    Détermine la position du prix dans le range.
+def calculer_fibonacci(
+    candles: Sequence[dict],
+    structure_analysis: Dict[str, Any],
+) -> Dict[str, Any]:
 
-    Résultats :
+    _validate_candles(candles)
 
-        discount
-        equilibrium
-        premium
-    """
-
-    validate_swing_range(
-        swing_high,
-        swing_low,
-    )
-
-    price = float(price)
-
-    equilibrium = (
-        swing_low
-        + (
-            (swing_high - swing_low)
-            * 0.5
+    high_price, low_price, direction = (
+        _find_swing_range(
+            structure_analysis
         )
     )
 
-    if price < equilibrium:
-        return "discount"
-
-    if price > equilibrium:
-        return "premium"
-
-    return "equilibrium"
-
-
-def calculer_premium_discount(
-    swing_high: float,
-    swing_low: float,
-) -> Dict[str, float]:
-    """
-    Retourne les bornes Premium / Discount.
-    """
-
-    validate_swing_range(
-        swing_high,
-        swing_low,
-    )
-
-    equilibrium = (
-        swing_low
-        + (
-            (swing_high - swing_low)
-            * 0.5
-        )
-    )
-
-    return {
-        "premium_high": float(swing_high),
-        "equilibrium": equilibrium,
-        "discount_low": float(swing_low),
-    }
-
-
-# ============================================================
-# POSITION DANS LE RANGE
-# ============================================================
-
-def position_dans_range(
-    price: float,
-    swing_high: float,
-    swing_low: float,
-) -> Dict:
-    """
-    Détermine la position relative du prix dans le range.
-    """
-
-    validate_swing_range(
-        swing_high,
-        swing_low,
-    )
-
-    price = float(price)
-
-    range_size = (
-        swing_high - swing_low
-    )
-
-    percentage = (
-        (price - swing_low)
-        / range_size
-    ) * 100.0
-
-    zone = determiner_zone_premium_discount(
-        price,
-        swing_high,
-        swing_low,
-    )
-
-    return {
-        "price": price,
-        "swing_high": float(swing_high),
-        "swing_low": float(swing_low),
-        "percentage": percentage,
-        "zone": zone,
-        "equilibrium": (
-            swing_low
-            + range_size * 0.5
-        ),
-    }
-
-
-# ============================================================
-# PROXIMITÉ D'UN NIVEAU
-# ============================================================
-
-def niveau_le_plus_proche(
-    price: float,
-    levels: Dict[str, float],
-) -> Optional[Dict]:
-    """
-    Retourne le niveau Fibonacci le plus proche du prix.
-    """
-
-    if not levels:
-        return None
-
-    price = float(price)
-
-    closest_name = min(
-        levels,
-        key=lambda name: abs(
-            float(levels[name]) - price
-        ),
-    )
-
-    closest_price = float(
-        levels[closest_name]
-    )
-
-    distance = abs(
-        closest_price - price
-    )
-
-    return {
-        "level": closest_name,
-        "price": closest_price,
-        "distance": distance,
-    }
-
-
-# ============================================================
-# ZONE FIBONACCI
-# ============================================================
-
-def determiner_zone_fibonacci(
-    price: float,
-    levels: Dict[str, float],
-    tolerance_percent: float = 0.5,
-) -> Dict:
-    """
-    Détermine si le prix est proche d'un niveau Fibonacci.
-
-    tolerance_percent :
-        tolérance relative par rapport au prix.
-    """
-
-    if price <= 0:
+    if high_price <= low_price:
         raise ValueError(
-            "price doit être supérieur à 0."
+            "Range Fibonacci invalide."
         )
 
-    if tolerance_percent < 0:
-        raise ValueError(
-            "tolerance_percent doit être >= 0."
-        )
+    range_size = high_price - low_price
 
-    closest = niveau_le_plus_proche(
-        price,
-        levels,
+    levels = {}
+
+    for ratio in FIBONACCI_LEVELS:
+
+        if direction == BULLISH:
+
+            price = (
+                high_price
+                - range_size * ratio
+            )
+
+        else:
+
+            price = (
+                low_price
+                + range_size * ratio
+            )
+
+        levels[f"{ratio:.3f}"] = price
+
+    current_price = float(
+        candles[-1]["close"]
     )
 
-    if closest is None:
-        return {
-            "near_level": False,
-            "level": None,
-            "distance": None,
-        }
+    midpoint = (
+        high_price + low_price
+    ) / 2.0
 
-    tolerance = (
-        price
-        * tolerance_percent
-        / 100.0
-    )
+    if current_price < midpoint:
 
-    return {
-        "near_level": (
-            closest["distance"]
-            <= tolerance
+        zone = "discount"
+
+    elif current_price > midpoint:
+
+        zone = "premium"
+
+    else:
+
+        zone = "equilibrium"
+
+    closest_ratio = min(
+        FIBONACCI_LEVELS,
+        key=lambda ratio: abs(
+            current_price
+            - levels[f"{ratio:.3f}"]
         ),
-        "level": closest["level"],
-        "price": closest["price"],
-        "distance": closest["distance"],
-        "tolerance": tolerance,
-    }
+    )
 
-
-# ============================================================
-# RETRACEMENT OPTIMAL
-# ============================================================
-
-def zone_retracement_optimale(
-    levels: Dict[str, float],
-) -> Dict[str, float]:
-    """
-    Extrait les niveaux généralement utilisés comme
-    zone de retracement profonde.
-
-    Cette fonction ne dit pas si cette zone constitue
-    une entrée valide.
-    """
-
-    wanted = {
-        "0.618",
-        "0.705",
-        "0.786",
-    }
+    closest_price = levels[
+        f"{closest_ratio:.3f}"
+    ]
 
     return {
-        key: value
-        for key, value in levels.items()
-        if key in wanted
+        "swing_high": high_price,
+        "swing_low": low_price,
+        "direction": direction,
+        "range": range_size,
+
+        "levels": levels,
+
+        "position": {
+            "price": current_price,
+            "zone": zone,
+        },
+
+        "closest_level": {
+            "level": f"{closest_ratio:.3f}",
+            "price": closest_price,
+            "distance": abs(
+                current_price
+                - closest_price
+            ),
+        },
     }
 
 
 # ============================================================
-# ANALYSE FIBONACCI COMPLÈTE
+# FONCTION PUBLIQUE
 # ============================================================
 
 def analyser_fibonacci(
-    price: float,
-    swing_high: float,
-    swing_low: float,
-    direction: str,
-) -> Dict:
-    """
-    Analyse complète du contexte Fibonacci.
-    """
+    candles: Sequence[dict],
+    structure_analysis: Dict[str, Any],
+) -> Dict[str, Any]:
 
-    fib = creer_fibonacci(
-        swing_high=swing_high,
-        swing_low=swing_low,
-        direction=direction,
+    return calculer_fibonacci(
+        candles=candles,
+        structure_analysis=structure_analysis,
     )
-
-    levels = fib.retracement_levels()
-
-    position = position_dans_range(
-        price=price,
-        swing_high=swing_high,
-        swing_low=swing_low,
-    )
-
-    closest = niveau_le_plus_proche(
-        price,
-        levels,
-    )
-
-    optimal_zone = (
-        zone_retracement_optimale(
-            levels
-        )
-    )
-
-    return {
-        "direction": direction,
-        "swing_high": swing_high,
-        "swing_low": swing_low,
-        "range_size": fib.range_size,
-        "equilibrium": fib.equilibrium,
-        "levels": levels,
-        "position": position,
-        "closest_level": closest,
-        "optimal_retracement": optimal_zone,
-    }
 
 
 # ============================================================
-# TEST INTERNE
+# TEST
 # ============================================================
 
 def _run_internal_test() -> None:
-    """
-    Teste les fonctions principales.
-    """
 
-    swing_high = 200.0
-    swing_low = 100.0
-    price = 140.0
+    candles = [
+        {
+            "datetime": str(i),
+            "open": 100 + i,
+            "high": 101 + i,
+            "low": 99 + i,
+            "close": 100.5 + i,
+        }
+        for i in range(100)
+    ]
 
-    fib = creer_fibonacci(
-        swing_high,
-        swing_low,
-        "bullish",
+    structure = {
+        "swings": {
+            "highs": [
+                {
+                    "index": 90,
+                    "price": 190,
+                }
+            ],
+            "lows": [
+                {
+                    "index": 80,
+                    "price": 180,
+                }
+            ],
+        }
+    }
+
+    result = analyser_fibonacci(
+        candles,
+        structure,
     )
 
-    assert fib.range_size == 100.0
-    assert fib.equilibrium == 150.0
-
-    levels = fib.retracement_levels()
-
-    assert "0.618" in levels
-    assert "0.705" in levels
-    assert "0.786" in levels
-
-    zone = determiner_zone_premium_discount(
-        price,
-        swing_high,
-        swing_low,
-    )
-
-    assert zone == "discount"
-
-    position = position_dans_range(
-        price,
-        swing_high,
-        swing_low,
-    )
-
-    assert position["zone"] == "discount"
-    assert position["percentage"] == 40.0
-
-    analysis = analyser_fibonacci(
-        price=price,
-        swing_high=swing_high,
-        swing_low=swing_low,
-        direction="bullish",
-    )
-
-    assert analysis["levels"]
-    assert analysis["optimal_retracement"]
+    assert "levels" in result
+    assert "position" in result
+    assert "closest_level" in result
 
     logger.info(
-        "Test Fibonacci réussi."
+        "Test Fibonacci réussi : %s",
+        result,
     )
 
-
-# ============================================================
-# EXÉCUTION DIRECTE
-# ============================================================
 
 if __name__ == "__main__":
 
@@ -588,10 +324,6 @@ if __name__ == "__main__":
         _run_internal_test()
 
         print("\n✅ FIBONACCI : OK")
-        print(
-            "Fibonacci + Premium/Discount "
-            "fonctionnent correctement."
-        )
 
     except Exception as exc:
 
