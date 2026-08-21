@@ -112,24 +112,6 @@ def _safe_float(
         return None
 
 
-def _direction_score(
-    direction: str,
-) -> int:
-    """
-    Retourne +1 pour BUY,
-    -1 pour SELL,
-    0 sinon.
-    """
-
-    if direction == BUY:
-        return 1
-
-    if direction == SELL:
-        return -1
-
-    return 0
-
-
 # ============================================================
 # SCORE ENGINE
 # ============================================================
@@ -186,13 +168,16 @@ class ScoreEngine:
         if not h4_bias:
             return 0, None
 
-        if h4_bias == direction.lower():
+        bias = str(h4_bias).lower().strip()
+        target = direction.lower()
+
+        if bias == target:
             return (
                 self.WEIGHTS["h4_trend"],
                 "Tendance H4 alignée.",
             )
 
-        if h4_bias == NEUTRAL.lower():
+        if bias == NEUTRAL.lower():
             return 0, None
 
         return (
@@ -213,22 +198,26 @@ class ScoreEngine:
         if not h1_analysis:
             return 0, None
 
-        bias = h1_analysis.get(
-            "bias",
-            NEUTRAL,
-        )
+        target = direction.lower()
+
+        bias = str(
+            h1_analysis.get(
+                "bias",
+                NEUTRAL,
+            )
+        ).lower().strip()
 
         score = 0
         reason = None
 
-        if bias == direction.lower():
+        if bias == target:
 
             score += 10
             reason = "Biais H1 aligné."
 
         elif (
             bias != NEUTRAL.lower()
-            and bias != direction.lower()
+            and bias != target
         ):
 
             score -= 10
@@ -239,17 +228,19 @@ class ScoreEngine:
             {},
         )
 
-        bos = latest.get("bos")
+        if not isinstance(latest, dict):
+            latest = {}
 
+        bos = latest.get("bos")
         choch = latest.get("choch")
 
         if bos:
 
-            bos_direction = bos.get(
-                "direction"
-            )
+            bos_direction = str(
+                bos.get("direction", "")
+            ).lower().strip()
 
-            if bos_direction == direction.lower():
+            if bos_direction == target:
                 score += 10
 
             else:
@@ -257,11 +248,11 @@ class ScoreEngine:
 
         elif choch:
 
-            choch_direction = choch.get(
-                "direction"
-            )
+            choch_direction = str(
+                choch.get("direction", "")
+            ).lower().strip()
 
-            if choch_direction == direction.lower():
+            if choch_direction == target:
                 score += 5
 
         return (
@@ -289,27 +280,31 @@ class ScoreEngine:
         score = 0
         reasons = []
 
-        target_direction = (
-            direction.lower()
+        target = direction.lower()
+
+        latest = m15_analysis.get(
+            "latest",
+            {},
         )
+
+        if not isinstance(latest, dict):
+            latest = {}
 
         # ----------------------------------------------------
         # ORDER BLOCK
         # ----------------------------------------------------
 
-        latest_ob = (
-            m15_analysis
-            .get("latest", {})
-            .get("order_block")
+        latest_ob = latest.get(
+            "order_block"
         )
 
         if latest_ob:
 
-            ob_direction = latest_ob.get(
-                "direction"
-            )
+            ob_direction = str(
+                latest_ob.get("direction", "")
+            ).lower().strip()
 
-            if ob_direction == target_direction:
+            if ob_direction == target:
 
                 score += 7
 
@@ -329,19 +324,17 @@ class ScoreEngine:
         # FVG
         # ----------------------------------------------------
 
-        latest_fvg = (
-            m15_analysis
-            .get("latest", {})
-            .get("fvg")
+        latest_fvg = latest.get(
+            "fvg"
         )
 
         if latest_fvg:
 
-            fvg_direction = latest_fvg.get(
-                "direction"
-            )
+            fvg_direction = str(
+                latest_fvg.get("direction", "")
+            ).lower().strip()
 
-            if fvg_direction == target_direction:
+            if fvg_direction == target:
 
                 score += 6
 
@@ -353,16 +346,22 @@ class ScoreEngine:
 
                 score -= 4
 
+                reasons.append(
+                    "FVG opposé."
+                )
+
         # ----------------------------------------------------
         # BIAIS
         # ----------------------------------------------------
 
-        bias = m15_analysis.get(
-            "bias",
-            NEUTRAL,
-        )
+        bias = str(
+            m15_analysis.get(
+                "bias",
+                NEUTRAL,
+            )
+        ).lower().strip()
 
-        if bias == target_direction:
+        if bias == target:
 
             score += 4
 
@@ -372,33 +371,43 @@ class ScoreEngine:
 
         elif (
             bias != NEUTRAL.lower()
-            and bias != target_direction
+            and bias != target
         ):
 
             score -= 4
+
+            reasons.append(
+                "Structure M15 opposée."
+            )
 
         # ----------------------------------------------------
         # SWEEP
         # ----------------------------------------------------
 
-        latest_sweep = (
-            m15_analysis
-            .get("latest", {})
-            .get("liquidity_sweep")
+        latest_sweep = latest.get(
+            "liquidity_sweep"
         )
 
         if latest_sweep:
 
-            sweep_direction = latest_sweep.get(
-                "direction"
-            )
+            sweep_direction = str(
+                latest_sweep.get("direction", "")
+            ).lower().strip()
 
-            if sweep_direction == target_direction:
+            if sweep_direction == target:
 
                 score += 3
 
                 reasons.append(
                     "Liquidity sweep aligné."
+                )
+
+            else:
+
+                score -= 3
+
+                reasons.append(
+                    "Liquidity sweep opposé."
                 )
 
         return (
@@ -428,10 +437,12 @@ class ScoreEngine:
 
         target = direction.lower()
 
-        bias = m5_analysis.get(
-            "bias",
-            NEUTRAL,
-        )
+        bias = str(
+            m5_analysis.get(
+                "bias",
+                NEUTRAL,
+            )
+        ).lower().strip()
 
         if bias == target:
 
@@ -457,13 +468,20 @@ class ScoreEngine:
             {},
         )
 
+        if not isinstance(latest, dict):
+            latest = {}
+
+        # ----------------------------------------------------
+        # BOS
+        # ----------------------------------------------------
+
         bos = latest.get("bos")
 
         if bos:
 
-            bos_direction = bos.get(
-                "direction"
-            )
+            bos_direction = str(
+                bos.get("direction", "")
+            ).lower().strip()
 
             if bos_direction == target:
 
@@ -477,13 +495,21 @@ class ScoreEngine:
 
                 score -= 5
 
+                reasons.append(
+                    "BOS M5 opposé."
+                )
+
+        # ----------------------------------------------------
+        # CHoCH
+        # ----------------------------------------------------
+
         choch = latest.get("choch")
 
         if choch:
 
-            choch_direction = choch.get(
-                "direction"
-            )
+            choch_direction = str(
+                choch.get("direction", "")
+            ).lower().strip()
 
             if choch_direction == target:
 
@@ -491,6 +517,14 @@ class ScoreEngine:
 
                 reasons.append(
                     "CHoCH M5 confirmé."
+                )
+
+            else:
+
+                score -= 3
+
+                reasons.append(
+                    "CHoCH M5 opposé."
                 )
 
         return (
@@ -522,9 +556,15 @@ class ScoreEngine:
             {},
         )
 
-        zone = position.get(
-            "zone"
-        )
+        if not isinstance(position, dict):
+            position = {}
+
+        zone = str(
+            position.get(
+                "zone",
+                "",
+            )
+        ).lower().strip()
 
         # ----------------------------------------------------
         # BUY privilégie discount
@@ -604,13 +644,19 @@ class ScoreEngine:
         score = 0
         reasons = []
 
-        ema_context = indicators.get(
-            "ema_context"
-        )
+        ema_context = str(
+            indicators.get(
+                "ema_context",
+                "",
+            )
+        ).lower().strip()
 
-        rsi_context = indicators.get(
-            "rsi_context"
-        )
+        rsi_context = str(
+            indicators.get(
+                "rsi_context",
+                "",
+            )
+        ).lower().strip()
 
         rsi = _safe_float(
             indicators.get("rsi")
@@ -622,9 +668,7 @@ class ScoreEngine:
         # EMA
         # ----------------------------------------------------
 
-        if (
-            ema_context == target
-        ):
+        if ema_context == target:
 
             score += 5
 
@@ -634,42 +678,70 @@ class ScoreEngine:
 
         elif (
             ema_context
-            and ema_context != "neutral"
+            and ema_context != NEUTRAL.lower()
         ):
 
             score -= 5
+
+            reasons.append(
+                "EMA opposées."
+            )
 
         # ----------------------------------------------------
         # RSI
         # ----------------------------------------------------
 
-        if target == BULLISH.lower():
+        if target == BUY.lower():
 
             if rsi_context == "bullish_bias":
 
                 score += 3
 
+                reasons.append(
+                    "RSI favorable aux acheteurs."
+                )
+
             elif rsi_context == "oversold":
 
                 score += 2
+
+                reasons.append(
+                    "RSI en zone survendue."
+                )
 
             elif rsi_context == "overbought":
 
                 score -= 3
 
-        elif target == BEARISH.lower():
+                reasons.append(
+                    "RSI en zone surachetée."
+                )
+
+        elif target == SELL.lower():
 
             if rsi_context == "bearish_bias":
 
                 score += 3
 
+                reasons.append(
+                    "RSI favorable aux vendeurs."
+                )
+
             elif rsi_context == "overbought":
 
                 score += 2
 
+                reasons.append(
+                    "RSI en zone surachetée."
+                )
+
             elif rsi_context == "oversold":
 
                 score -= 3
+
+                reasons.append(
+                    "RSI en zone survendue."
+                )
 
         # ----------------------------------------------------
         # PROTECTION CONTRE RSI EXTRÊME
@@ -677,13 +749,21 @@ class ScoreEngine:
 
         if rsi is not None:
 
-            if target == BULLISH.lower() and rsi >= 80:
+            if target == BUY.lower() and rsi >= 80:
 
                 score -= 2
 
-            elif target == BEARISH.lower() and rsi <= 20:
+                reasons.append(
+                    "RSI extrêmement élevé."
+                )
+
+            elif target == SELL.lower() and rsi <= 20:
 
                 score -= 2
+
+                reasons.append(
+                    "RSI extrêmement bas."
+                )
 
         return (
             _clamp(
@@ -710,18 +790,24 @@ class ScoreEngine:
         score = 0
         reasons = []
 
-        latest_sweep = (
-            structure_analysis
-            .get("latest", {})
-            .get("liquidity_sweep")
+        latest = structure_analysis.get(
+            "latest",
+            {},
+        )
+
+        if not isinstance(latest, dict):
+            latest = {}
+
+        latest_sweep = latest.get(
+            "liquidity_sweep"
         )
 
         if not latest_sweep:
             return 0, []
 
-        sweep_direction = latest_sweep.get(
-            "direction"
-        )
+        sweep_direction = str(
+            latest_sweep.get("direction", "")
+        ).lower().strip()
 
         if sweep_direction == direction.lower():
 
@@ -763,7 +849,9 @@ class ScoreEngine:
         indicators: Optional[Dict] = None,
     ) -> ScoreResult:
 
-        direction = direction.upper()
+        direction = str(
+            direction
+        ).upper().strip()
 
         if direction not in {
             BUY,
@@ -857,18 +945,12 @@ class ScoreEngine:
             direction,
         )
 
-        add_score(
-            points,
-        )
+        add_score(points)
 
         if points > 0:
-            reasons.extend(
-                m15_reasons
-            )
-        else:
-            warnings.extend(
-                m15_reasons
-            )
+            reasons.extend(m15_reasons)
+        elif points < 0:
+            warnings.extend(m15_reasons)
 
         # ----------------------------------------------------
         # M5
@@ -879,18 +961,12 @@ class ScoreEngine:
             direction,
         )
 
-        add_score(
-            points,
-        )
+        add_score(points)
 
         if points > 0:
-            reasons.extend(
-                m5_reasons
-            )
-        else:
-            warnings.extend(
-                m5_reasons
-            )
+            reasons.extend(m5_reasons)
+        elif points < 0:
+            warnings.extend(m5_reasons)
 
         # ----------------------------------------------------
         # FIBONACCI
@@ -915,18 +991,12 @@ class ScoreEngine:
             direction,
         )
 
-        add_score(
-            points,
-        )
+        add_score(points)
 
         if points > 0:
-            reasons.extend(
-                indicator_reasons
-            )
-        else:
-            warnings.extend(
-                indicator_reasons
-            )
+            reasons.extend(indicator_reasons)
+        elif points < 0:
+            warnings.extend(indicator_reasons)
 
         # ----------------------------------------------------
         # LIQUIDITÉ
@@ -937,29 +1007,20 @@ class ScoreEngine:
             direction,
         )
 
-        add_score(
-            points,
-        )
+        add_score(points)
 
         if points > 0:
-            reasons.extend(
-                liquidity_reasons
-            )
-        else:
-            warnings.extend(
-                liquidity_reasons
-            )
+            reasons.extend(liquidity_reasons)
+        elif points < 0:
+            warnings.extend(liquidity_reasons)
 
         # ----------------------------------------------------
         # SCORE FINAL
         # ----------------------------------------------------
 
         if direction == BUY:
-
             final_score = buy_score
-
         else:
-
             final_score = sell_score
 
         final_score = _clamp(
