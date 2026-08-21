@@ -6,30 +6,28 @@ Orchestrateur principal de l'analyse technique.
 
 Pipeline :
 
-DATA
- ↓
-INDICATEURS
- ↓
-STRUCTURE
- ↓
-FIBONACCI
- ↓
-SCORE
- ↓
-RR
- ↓
-FILTRE QUALITÉ
- ↓
-RÉSULTAT FINAL
+    DATA
+      ↓
+    INDICATEURS
+      ↓
+    STRUCTURE
+      ↓
+    FIBONACCI
+      ↓
+    SCORE
+      ↓
+    RR
+      ↓
+    FILTRE QUALITÉ
+      ↓
+    RÉSULTAT
 
 IMPORTANT :
-- aucun appel Groq ;
-- aucune décision prise par une IA ;
-- aucun message Telegram ;
-- aucun envoi de signal ;
-- les calculs techniques restent déterministes.
-
-Ce module orchestre les modules spécialisés.
+- Ce module orchestre les modules déterministes.
+- Il ne remplace pas structure.py, score.py ou rr.py.
+- Aucune décision basée sur Groq ici.
+- Aucune décision Telegram ici.
+- L'IA sera ajoutée après validation complète du pipeline.
 """
 
 from __future__ import annotations
@@ -37,42 +35,24 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-
-logger = logging.getLogger(__name__)
-
-
-# ============================================================
-# IMPORTS
-# ============================================================
-
 from data import get_candles
-
 from indicateurs import (
     calculer_ema,
     calculer_rsi,
     calculer_atr,
 )
-
 from structure import (
     analyser_structure,
+    detecter_fvg,
+    detecter_order_blocks,
 )
+from fibonacci import *
+from score import calculer_score
+from rr import calculer_rr_complet
+from filtre_qualite import filtrer_qualite
 
-from fibonacci import (
-    analyser_fibonacci,
-)
 
-from score import (
-    calculer_score,
-)
-
-from rr import (
-    calculer_rr_complet,
-    resume_rr,
-)
-
-from filtre_qualite import (
-    filtrer_qualite,
-)
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -81,18 +61,20 @@ from filtre_qualite import (
 
 BUY = "BUY"
 SELL = "SELL"
+
 NEUTRAL = "NEUTRAL"
 
 DEFAULT_SYMBOL = "XAU/USD"
 
-DEFAULT_TIMEFRAME = "15min"
-
-HIGHER_TIMEFRAMES = (
+DEFAULT_TIMEFRAMES = (
     "H4",
     "H1",
     "M15",
     "M5",
 )
+
+DEFAULT_MIN_SCORE = 80
+DEFAULT_MIN_RR = 2.0
 
 
 # ============================================================
@@ -101,8 +83,8 @@ HIGHER_TIMEFRAMES = (
 
 def _safe_float(
     value: Any,
-    default: Optional[float] = None,
-) -> Optional[float]:
+    default: float = 0.0,
+) -> float:
     """
     Conversion numérique sécurisée.
     """
@@ -127,524 +109,141 @@ def _normalize_direction(
     Normalise une direction.
     """
 
-    if direction is None:
-        return NEUTRAL
-
     value = str(
-        direction
+        direction or ""
     ).upper().strip()
 
-    if value in {
+    if value not in {
         BUY,
         SELL,
     }:
-        return value
+        return NEUTRAL
 
-    return NEUTRAL
+    return value
 
 
-def _normalize_bias(
-    bias: Any,
+def _get_last_close(
+    candles: list,
+) -> float:
+    """
+    Récupère le dernier prix de clôture.
+    """
+
+    if not candles:
+        raise ValueError(
+            "Aucune bougie disponible."
+        )
+
+    last = candles[-1]
+
+    if isinstance(last, dict):
+
+        for key in (
+            "close",
+            "Close",
+            "CLOSE",
+        ):
+
+            if key in last:
+                return _safe_float(
+                    last[key]
+                )
+
+    raise ValueError(
+        "Impossible de récupérer le prix de clôture."
+    )
+
+
+def _get_value(
+    obj: Any,
+    key: str,
+    default: Any = None,
+) -> Any:
+    """
+    Récupération sécurisée d'une valeur
+    depuis un dictionnaire ou un objet.
+    """
+
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+
+        return obj.get(
+            key,
+            default,
+        )
+
+    return getattr(
+        obj,
+        key,
+        default,
+    )
+
+
+# ============================================================
+# EXTRACTION DE BIAIS
+# ============================================================
+
+def _extract_bias(
+    structure_result: Any,
 ) -> str:
     """
-    Normalise un biais technique.
+    Extrait le biais d'une analyse de structure.
     """
 
+    bias = _get_value(
+        structure_result,
+        "bias",
+        None,
+    )
+
     if bias is None:
-        return NEUTRAL.lower()
+        return NEUTRAL
 
     value = str(
         bias
     ).lower().strip()
 
     if value in {
-        "bullish",
         "buy",
+        "bullish",
         "long",
     }:
-        return "bullish"
-
-    if value in {
-        "bearish",
-        "sell",
-        "short",
-    }:
-        return "bearish"
-
-    return NEUTRAL.lower()
-
-
-def _extract_latest_close(
-    candles: list[dict],
-) -> Optional[float]:
-    """
-    Récupère le dernier prix de clôture.
-    """
-
-    if not candles:
-        return None
-
-    candle = candles[-1]
-
-    if not isinstance(candle, dict):
-        return None
-
-    for key in (
-        "close",
-        "Close",
-        "CLOSE",
-    ):
-
-        if key in candle:
-            return _safe_float(
-                candle[key]
-            )
-
-    return None
-
-
-def _extract_latest_atr(
-    atr_data: Any,
-) -> Optional[float]:
-    """
-    Extrait proprement la dernière valeur ATR.
-
-    Supporte :
-        float
-        int
-        list
-        tuple
-        dict
-    """
-
-    if atr_data is None:
-        return None
-
-    if isinstance(
-        atr_data,
-        (int, float),
-    ):
-        return float(atr_data)
-
-    if isinstance(
-        atr_data,
-        (list, tuple),
-    ):
-
-        if not atr_data:
-            return None
-
-        return _safe_float(
-            atr_data[-1]
-        )
-
-    if isinstance(
-        atr_data,
-        dict,
-    ):
-
-        for key in (
-            "atr",
-            "ATR",
-            "value",
-            "last",
-        ):
-
-            if key in atr_data:
-
-                value = atr_data[key]
-
-                if isinstance(
-                    value,
-                    (list, tuple),
-                ):
-
-                    if value:
-                        return _safe_float(
-                            value[-1]
-                        )
-
-                return _safe_float(
-                    value
-                )
-
-    return None
-
-
-# ============================================================
-# INDICATEURS
-# ============================================================
-
-def _calculer_indicateurs(
-    candles: list[dict],
-) -> Dict[str, Any]:
-    """
-    Calcule les indicateurs nécessaires au pipeline.
-    """
-
-    if not candles:
-        return {}
-
-    result: Dict[str, Any] = {}
-
-    try:
-
-        result["ema20"] = calculer_ema(
-            candles,
-            20,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "EMA20 impossible : %s",
-            exc,
-        )
-
-        result["ema20"] = None
-
-    try:
-
-        result["ema50"] = calculer_ema(
-            candles,
-            50,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "EMA50 impossible : %s",
-            exc,
-        )
-
-        result["ema50"] = None
-
-    try:
-
-        result["rsi"] = calculer_rsi(
-            candles,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "RSI impossible : %s",
-            exc,
-        )
-
-        result["rsi"] = None
-
-    try:
-
-        result["atr"] = calculer_atr(
-            candles,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "ATR impossible : %s",
-            exc,
-        )
-
-        result["atr"] = None
-
-    return result
-
-
-# ============================================================
-# CONTEXTE INDICATEURS
-# ============================================================
-
-def _construire_contexte_indicateurs(
-    indicators: Dict[str, Any],
-    price: Optional[float],
-) -> Dict[str, Any]:
-    """
-    Transforme les indicateurs bruts en contexte exploitable
-    par le moteur de score.
-    """
-
-    result = dict(
-        indicators
-    )
-
-    ema20 = _safe_float(
-        indicators.get("ema20")
-    )
-
-    ema50 = _safe_float(
-        indicators.get("ema50")
-    )
-
-    rsi = _safe_float(
-        indicators.get("rsi")
-    )
-
-    # --------------------------------------------------------
-    # EMA CONTEXT
-    # --------------------------------------------------------
-
-    if (
-        ema20 is not None
-        and ema50 is not None
-    ):
-
-        if ema20 > ema50:
-
-            result["ema_context"] = "bullish"
-
-        elif ema20 < ema50:
-
-            result["ema_context"] = "bearish"
-
-        else:
-
-            result["ema_context"] = "neutral"
-
-    else:
-
-        result["ema_context"] = "neutral"
-
-    # --------------------------------------------------------
-    # RSI CONTEXT
-    # --------------------------------------------------------
-
-    if rsi is None:
-
-        result["rsi_context"] = "neutral"
-
-    elif rsi <= 30:
-
-        result["rsi_context"] = "oversold"
-
-    elif rsi >= 70:
-
-        result["rsi_context"] = "overbought"
-
-    elif rsi >= 50:
-
-        result["rsi_context"] = "bullish_bias"
-
-    else:
-
-        result["rsi_context"] = "bearish_bias"
-
-    result["price"] = price
-
-    return result
-
-
-# ============================================================
-# EXTRACTION BIAS
-# ============================================================
-
-def _extract_bias(
-    analysis: Dict[str, Any],
-) -> str:
-    """
-    Extrait le biais d'une analyse structurelle.
-    """
-
-    if not isinstance(
-        analysis,
-        dict,
-    ):
-        return NEUTRAL.lower()
-
-    bias = analysis.get(
-        "bias"
-    )
-
-    return _normalize_bias(
-        bias
-    )
-
-
-# ============================================================
-# DIRECTION GLOBALE
-# ============================================================
-
-def _determiner_direction(
-    h4_bias: str,
-    h1_bias: str,
-    m15_bias: str,
-) -> str:
-    """
-    Détermine la direction dominante H4/H1/M15.
-
-    Aucun signal n'est généré ici.
-    """
-
-    bullish = 0
-    bearish = 0
-
-    for bias in (
-        h4_bias,
-        h1_bias,
-        m15_bias,
-    ):
-
-        normalized = _normalize_bias(
-            bias
-        )
-
-        if normalized == "bullish":
-            bullish += 1
-
-        elif normalized == "bearish":
-            bearish += 1
-
-    if bullish > bearish:
         return BUY
 
-    if bearish > bullish:
+    if value in {
+        "sell",
+        "bearish",
+        "short",
+    }:
         return SELL
 
     return NEUTRAL
 
 
 # ============================================================
-# EXTRACTION SWING
+# EXTRACTION DES DERNIERS ÉLÉMENTS
 # ============================================================
 
-def _extract_swing_range(
-    structure_analysis: Dict[str, Any],
-    candles: list[dict],
-) -> tuple[Optional[float], Optional[float]]:
+def _extract_latest(
+    structure_result: Any,
+) -> Dict[str, Any]:
     """
-    Cherche un swing high / swing low exploitable.
-
-    Supporte plusieurs formats possibles provenant de
-    structure.py.
+    Extrait les informations récentes
+    d'une analyse de structure.
     """
 
-    swing_high = None
-    swing_low = None
-
-    if isinstance(
-        structure_analysis,
-        dict,
-    ):
-
-        # ----------------------------------------------------
-        # Format direct
-        # ----------------------------------------------------
-
-        swing_high = (
-            structure_analysis.get(
-                "swing_high"
-            )
-            or structure_analysis.get(
-                "latest_swing_high"
-            )
-        )
-
-        swing_low = (
-            structure_analysis.get(
-                "swing_low"
-            )
-            or structure_analysis.get(
-                "latest_swing_low"
-            )
-        )
-
-        # ----------------------------------------------------
-        # Format swings
-        # ----------------------------------------------------
-
-        swings = structure_analysis.get(
-            "swings"
-        )
-
-        if isinstance(
-            swings,
-            dict,
-        ):
-
-            if swing_high is None:
-
-                swing_high = (
-                    swings.get(
-                        "high"
-                    )
-                    or swings.get(
-                        "swing_high"
-                    )
-                )
-
-            if swing_low is None:
-
-                swing_low = (
-                    swings.get(
-                        "low"
-                    )
-                    or swings.get(
-                        "swing_low"
-                    )
-                )
-
-    swing_high = _safe_float(
-        swing_high
+    latest = _get_value(
+        structure_result,
+        "latest",
+        {},
     )
 
-    swing_low = _safe_float(
-        swing_low
-    )
+    if isinstance(latest, dict):
+        return latest
 
-    # --------------------------------------------------------
-    # Fallback sécurisé
-    # --------------------------------------------------------
-
-    if (
-        swing_high is None
-        or swing_low is None
-    ):
-
-        highs = []
-        lows = []
-
-        for candle in candles:
-
-            if not isinstance(
-                candle,
-                dict,
-            ):
-                continue
-
-            high = _safe_float(
-                candle.get("high")
-            )
-
-            low = _safe_float(
-                candle.get("low")
-            )
-
-            if high is not None:
-                highs.append(high)
-
-            if low is not None:
-                lows.append(low)
-
-        if highs:
-            swing_high = max(highs)
-
-        if lows:
-            swing_low = min(lows)
-
-    if (
-        swing_high is None
-        or swing_low is None
-    ):
-        return None, None
-
-    if swing_high <= swing_low:
-        return None, None
-
-    return (
-        swing_high,
-        swing_low,
-    )
+    return {}
 
 
 # ============================================================
@@ -652,77 +251,485 @@ def _extract_swing_range(
 # ============================================================
 
 def analyser_timeframe(
-    symbol: str,
+    candles: list,
     timeframe: str,
-    limit: int = 200,
 ) -> Dict[str, Any]:
     """
-    Analyse une timeframe complète.
+    Analyse une timeframe.
 
-    Retourne :
-        candles
-        price
-        indicators
+    Étapes :
+
+        bougies
+          ↓
+        indicateurs
+          ↓
         structure
-        bias
+          ↓
+        FVG
+          ↓
+        Order Blocks
     """
 
-    logger.info(
-        "Analyse %s | %s",
-        symbol,
-        timeframe,
-    )
-
-    candles = get_candles(
-        symbol,
-        timeframe,
-        limit=limit,
-    )
-
     if not candles:
+
         raise ValueError(
-            f"Aucune donnée reçue pour "
-            f"{symbol} {timeframe}."
+            f"Aucune donnée disponible pour {timeframe}."
         )
 
-    price = _extract_latest_close(
-        candles
+    # ========================================================
+    # INDICATEURS
+    # ========================================================
+
+    ema20 = calculer_ema(
+        candles,
+        period=20,
     )
 
-    indicators_raw = _calculer_indicateurs(
-        candles
+    ema50 = calculer_ema(
+        candles,
+        period=50,
     )
 
-    indicators = (
-        _construire_contexte_indicateurs(
-            indicators_raw,
-            price,
-        )
+    rsi = calculer_rsi(
+        candles,
     )
+
+    atr = calculer_atr(
+        candles,
+    )
+
+    # ========================================================
+    # STRUCTURE
+    # ========================================================
 
     structure = analyser_structure(
         candles
     )
 
-    if not isinstance(
-        structure,
-        dict,
-    ):
-        structure = {}
+    # ========================================================
+    # FVG
+    # ========================================================
+
+    try:
+
+        fvg = detecter_fvg(
+            candles
+        )
+
+    except Exception as exc:
+
+        logger.warning(
+            "Détection FVG échouée sur %s : %s",
+            timeframe,
+            exc,
+        )
+
+        fvg = []
+
+    # ========================================================
+    # ORDER BLOCKS
+    # ========================================================
+
+    try:
+
+        order_blocks = detecter_order_blocks(
+            candles
+        )
+
+    except Exception as exc:
+
+        logger.warning(
+            "Détection Order Block échouée sur %s : %s",
+            timeframe,
+            exc,
+        )
+
+        order_blocks = []
+
+    # ========================================================
+    # BIAIS
+    # ========================================================
 
     bias = _extract_bias(
         structure
     )
 
+    latest = _extract_latest(
+        structure
+    )
+
     return {
-        "symbol": symbol,
         "timeframe": timeframe,
-        "candles": candles,
-        "price": price,
-        "indicators": indicators,
+
+        "candles_count": len(
+            candles
+        ),
+
+        "ema20": ema20,
+        "ema50": ema50,
+
+        "rsi": rsi,
+        "atr": atr,
+
         "structure": structure,
+
         "bias": bias,
+
+        "latest": latest,
+
+        "fvg": fvg,
+
+        "order_blocks": order_blocks,
     }
+
+
+# ============================================================
+# CHARGEMENT MULTI-TIMEFRAME
+# ============================================================
+
+def charger_donnees_multi_timeframe(
+    symbol: str = DEFAULT_SYMBOL,
+) -> Dict[str, list]:
+    """
+    Charge les données H4 / H1 / M15 / M5.
+    """
+
+    result = {}
+
+    for timeframe in DEFAULT_TIMEFRAMES:
+
+        logger.info(
+            "Chargement %s %s...",
+            symbol,
+            timeframe,
+        )
+
+        try:
+
+            candles = get_candles(
+                symbol,
+                timeframe,
+            )
+
+        except TypeError:
+
+            # Compatibilité avec une éventuelle
+            # signature différente.
+            candles = get_candles(
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+
+        if not candles:
+
+            logger.warning(
+                "Aucune bougie pour %s.",
+                timeframe,
+            )
+
+            result[timeframe] = []
+
+        else:
+
+            result[timeframe] = candles
+
+    return result
+
+
+# ============================================================
+# DÉTERMINATION DE LA DIRECTION
+# ============================================================
+
+def determiner_direction(
+    h4: Dict[str, Any],
+    h1: Dict[str, Any],
+    m15: Dict[str, Any],
+) -> str:
+    """
+    Détermine la direction principale.
+
+    Priorité :
+
+        H4
+        H1
+        M15
+
+    Le M5 ne détermine pas la direction principale.
+    Il sert de confirmation.
+    """
+
+    biases = [
+        h4.get("bias", NEUTRAL),
+        h1.get("bias", NEUTRAL),
+        m15.get("bias", NEUTRAL),
+    ]
+
+    buy_count = biases.count(BUY)
+    sell_count = biases.count(SELL)
+
+    if buy_count > sell_count:
+        return BUY
+
+    if sell_count > buy_count:
+        return SELL
+
+    return NEUTRAL
+
+
+# ============================================================
+# CONTEXTE INDICATEURS
+# ============================================================
+
+def construire_contexte_indicateurs(
+    analysis: Dict[str, Any],
+    direction: str,
+) -> Dict[str, Any]:
+    """
+    Construit le contexte utilisé par score.py.
+    """
+
+    ema20 = _safe_float(
+        analysis.get("ema20")
+    )
+
+    ema50 = _safe_float(
+        analysis.get("ema50")
+    )
+
+    rsi = _safe_float(
+        analysis.get("rsi")
+    )
+
+    ema_context = NEUTRAL
+
+    if ema20 > 0 and ema50 > 0:
+
+        if ema20 > ema50:
+            ema_context = "bullish"
+
+        elif ema20 < ema50:
+            ema_context = "bearish"
+
+    rsi_context = ""
+
+    if direction == BUY:
+
+        if rsi <= 30:
+            rsi_context = "oversold"
+
+        elif rsi >= 70:
+            rsi_context = "overbought"
+
+        elif rsi >= 50:
+            rsi_context = "bullish_bias"
+
+    elif direction == SELL:
+
+        if rsi >= 70:
+            rsi_context = "overbought"
+
+        elif rsi <= 30:
+            rsi_context = "oversold"
+
+        elif rsi <= 50:
+            rsi_context = "bearish_bias"
+
+    return {
+        "ema20": ema20,
+        "ema50": ema50,
+        "rsi": rsi,
+
+        "ema_context": ema_context,
+        "rsi_context": rsi_context,
+
+        "direction": direction,
+    }
+
+
+# ============================================================
+# FIBONACCI
+# ============================================================
+
+def construire_fibonacci(
+    candles: list,
+    direction: str,
+) -> Dict[str, Any]:
+    """
+    Prépare l'analyse Fibonacci.
+
+    Le module fibonacci.py reste responsable
+    des calculs Fibonacci.
+    """
+
+    if not candles:
+        return {}
+
+    try:
+
+        # Tentative d'utilisation de la fonction publique
+        # si elle existe dans fibonacci.py.
+
+        if direction == BUY:
+
+            fonction = globals().get(
+                "calculer_fibonacci"
+            )
+
+        else:
+
+            fonction = globals().get(
+                "calculer_fibonacci"
+            )
+
+        if fonction:
+
+            try:
+
+                result = fonction(
+                    candles,
+                    direction,
+                )
+
+            except TypeError:
+
+                result = fonction(
+                    candles
+                )
+
+            if isinstance(
+                result,
+                dict,
+            ):
+
+                return result
+
+    except Exception as exc:
+
+        logger.warning(
+            "Analyse Fibonacci indisponible : %s",
+            exc,
+        )
+
+    return {}
+
+
+# ============================================================
+# CALCUL DU SL
+# ============================================================
+
+def determiner_stop_loss(
+    direction: str,
+    entry: float,
+    m15_analysis: Dict[str, Any],
+    h1_analysis: Dict[str, Any],
+    atr: float = 0.0,
+) -> Optional[float]:
+    """
+    Détermine un SL technique.
+
+    Priorité :
+
+        structure M15
+        structure H1
+        ATR de sécurité
+
+    Cette fonction ne calcule pas le RR.
+    """
+
+    latest_m15 = m15_analysis.get(
+        "latest",
+        {},
+    )
+
+    latest_h1 = h1_analysis.get(
+        "latest",
+        {},
+    )
+
+    candidates = []
+
+    # --------------------------------------------------------
+    # M15
+    # --------------------------------------------------------
+
+    for source in (
+        latest_m15,
+        latest_h1,
+    ):
+
+        if not isinstance(
+            source,
+            dict,
+        ):
+            continue
+
+        for key in (
+            "swing_low",
+            "swing_high",
+            "low",
+            "high",
+        ):
+
+            value = source.get(
+                key
+            )
+
+            if value is not None:
+
+                value = _safe_float(
+                    value
+                )
+
+                if value > 0:
+                    candidates.append(
+                        value
+                    )
+
+    # --------------------------------------------------------
+    # SL structurel
+    # --------------------------------------------------------
+
+    if direction == BUY:
+
+        below_entry = [
+            value
+            for value in candidates
+            if value < entry
+        ]
+
+        if below_entry:
+
+            return max(
+                below_entry
+            )
+
+        if atr > 0:
+
+            return entry - (
+                atr * 1.5
+            )
+
+    else:
+
+        above_entry = [
+            value
+            for value in candidates
+            if value > entry
+        ]
+
+        if above_entry:
+
+            return min(
+                above_entry
+            )
+
+        if atr > 0:
+
+            return entry + (
+                atr * 1.5
+            )
+
+    return None
 
 
 # ============================================================
@@ -731,355 +738,385 @@ def analyser_timeframe(
 
 def analyser_marche(
     symbol: str = DEFAULT_SYMBOL,
-    timeframe: str = DEFAULT_TIMEFRAME,
-    limit: int = 200,
-    minimum_rr: float = 2.0,
-    minimum_score: int = 80,
 ) -> Dict[str, Any]:
     """
     Analyse complète du marché.
 
-    Pipeline :
-
-        H4
-        H1
-        M15
-        M5
-          ↓
-        structure
-          ↓
-        Fibonacci
-          ↓
-        score
-          ↓
-        RR
-          ↓
-        filtre qualité
-
-    Aucun signal Telegram n'est envoyé ici.
+    Retourne toutes les données nécessaires
+    aux modules supérieurs.
     """
 
     logger.info(
-        "=============================================="
-    )
-
-    logger.info(
-        "VISION TRADE AI V2 | ANALYSE | %s",
+        "Début analyse Vision Trade AI V2 : %s",
         symbol,
     )
 
-    logger.info(
-        "=============================================="
+    # ========================================================
+    # DATA
+    # ========================================================
+
+    market_data = (
+        charger_donnees_multi_timeframe(
+            symbol
+        )
     )
 
     # ========================================================
-    # 1. H4
+    # ANALYSE TIMEFRAMES
     # ========================================================
 
-    h4 = analyser_timeframe(
-        symbol,
+    analyses = {}
+
+    for timeframe in DEFAULT_TIMEFRAMES:
+
+        candles = market_data.get(
+            timeframe,
+            [],
+        )
+
+        if not candles:
+
+            analyses[timeframe] = {}
+
+            continue
+
+        analyses[timeframe] = analyser_timeframe(
+            candles,
+            timeframe,
+        )
+
+    h4 = analyses.get(
         "H4",
-        limit,
+        {},
     )
 
-    # ========================================================
-    # 2. H1
-    # ========================================================
-
-    h1 = analyser_timeframe(
-        symbol,
+    h1 = analyses.get(
         "H1",
-        limit,
+        {},
     )
 
-    # ========================================================
-    # 3. M15
-    # ========================================================
-
-    m15 = analyser_timeframe(
-        symbol,
+    m15 = analyses.get(
         "M15",
-        limit,
+        {},
     )
 
-    # ========================================================
-    # 4. M5
-    # ========================================================
-
-    m5 = analyser_timeframe(
-        symbol,
+    m5 = analyses.get(
         "M5",
-        limit,
+        {},
     )
 
     # ========================================================
-    # BIAIS
+    # DIRECTION
     # ========================================================
 
-    h4_bias = h4["bias"]
-    h1_bias = h1["bias"]
-    m15_bias = m15["bias"]
-    m5_bias = m5["bias"]
-
-    direction = _determiner_direction(
-        h4_bias,
-        h1_bias,
-        m15_bias,
+    direction = determiner_direction(
+        h4,
+        h1,
+        m15,
     )
-
-    # ========================================================
-    # PAS DE DIRECTION = PAS DE SETUP
-    # ========================================================
 
     if direction == NEUTRAL:
 
         return {
+            "status": "NO_DIRECTION",
             "symbol": symbol,
-            "timeframe": timeframe,
-            "status": "WAIT",
             "direction": NEUTRAL,
-            "reason": (
-                "Aucune direction dominante "
-                "H4/H1/M15."
-            ),
-            "h4": h4,
-            "h1": h1,
-            "m15": m15,
-            "m5": m5,
+            "analyses": analyses,
         }
 
-    # ========================================================
-    # FIBONACCI
-    # ========================================================
-
-    swing_high, swing_low = (
-        _extract_swing_range(
-            m15["structure"],
-            m15["candles"],
-        )
+    logger.info(
+        "Direction principale : %s",
+        direction,
     )
-
-    fibonacci = {}
-
-    if (
-        swing_high is not None
-        and swing_low is not None
-        and m15["price"] is not None
-    ):
-
-        try:
-
-            fibonacci = analyser_fibonacci(
-                price=m15["price"],
-                swing_high=swing_high,
-                swing_low=swing_low,
-                direction=(
-                    "bullish"
-                    if direction == BUY
-                    else "bearish"
-                ),
-            )
-
-        except Exception as exc:
-
-            logger.warning(
-                "Fibonacci indisponible : %s",
-                exc,
-            )
 
     # ========================================================
     # INDICATEURS
     # ========================================================
 
-    indicators = m15["indicators"]
+    indicator_context = (
+        construire_contexte_indicateurs(
+            m15,
+            direction,
+        )
+    )
+
+    # ========================================================
+    # FIBONACCI
+    # ========================================================
+
+    fibonacci_analysis = (
+        construire_fibonacci(
+            market_data.get(
+                "M15",
+                [],
+            ),
+            direction,
+        )
+    )
 
     # ========================================================
     # SCORE
     # ========================================================
 
-    score = calculer_score(
+    score_result = calculer_score(
         direction=direction,
-        h4_bias=h4_bias,
-        h1_analysis=h1["structure"],
-        m15_analysis=m15["structure"],
-        m5_analysis=m5["structure"],
-        fibonacci_analysis=fibonacci,
-        indicators=indicators,
+
+        h4_bias=h4.get(
+            "bias",
+            NEUTRAL,
+        ),
+
+        h1_analysis=h1,
+
+        m15_analysis=m15,
+
+        m5_analysis=m5,
+
+        fibonacci_analysis=fibonacci_analysis,
+
+        indicators=indicator_context,
+
+        threshold=DEFAULT_MIN_SCORE,
+    )
+
+    logger.info(
+        "Score %s : %s/100",
+        direction,
+        score_result.get(
+            "final_score"
+        ),
+    )
+
+    # ========================================================
+    # ENTRY
+    # ========================================================
+
+    entry = _get_last_close(
+        market_data.get(
+            "M15",
+            [],
+        )
+    )
+
+    # ========================================================
+    # ATR
+    # ========================================================
+
+    atr = _safe_float(
+        m15.get(
+            "atr",
+            0,
+        )
+    )
+
+    # ========================================================
+    # STOP LOSS
+    # ========================================================
+
+    stop_loss = determiner_stop_loss(
+        direction=direction,
+
+        entry=entry,
+
+        m15_analysis=m15,
+
+        h1_analysis=h1,
+
+        atr=atr,
     )
 
     # ========================================================
     # RR
     # ========================================================
 
-    price = m15["price"]
+    if stop_loss is None:
 
-    atr = _extract_latest_atr(
-        indicators.get("atr")
-    )
+        logger.warning(
+            "Impossible de déterminer le Stop Loss."
+        )
 
-    rr_result = {}
-    rr_summary = {}
+        return {
+            "status": "NO_STOP_LOSS",
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "score": score_result,
+            "analyses": analyses,
+        }
 
-    # --------------------------------------------------------
-    # SL basé sur ATR
-    # --------------------------------------------------------
+    try:
 
-    if (
-        price is not None
-        and atr is not None
-        and atr > 0
-    ):
+        rr_result = calculer_rr_complet(
+            entry=entry,
 
-        if direction == BUY:
+            stop_loss=stop_loss,
 
-            stop_loss = (
-                price - atr
-            )
+            direction=direction,
 
-        else:
+            minimum_rr=DEFAULT_MIN_RR,
+        )
 
-            stop_loss = (
-                price + atr
-            )
+        rr_data = {
+            "direction": rr_result.direction,
 
-        try:
+            "entry": rr_result.entry,
 
-            rr_object = calculer_rr_complet(
-                entry=price,
-                stop_loss=stop_loss,
-                direction=direction,
-                minimum_rr=minimum_rr,
-            )
+            "stop_loss": rr_result.stop_loss,
 
-            rr_result = {
-                "direction": rr_object.direction,
-                "entry": rr_object.entry,
-                "stop_loss": rr_object.stop_loss,
-                "risk": rr_object.risk,
-                "tp1": rr_object.tp1,
-                "tp2": rr_object.tp2,
-                "tp3": rr_object.tp3,
-                "rr_tp1": rr_object.rr_tp1,
-                "rr_tp2": rr_object.rr_tp2,
-                "rr_tp3": rr_object.rr_tp3,
-                "minimum_rr": rr_object.minimum_rr,
-                "passes_rr_filter": (
-                    rr_object.passes_rr_filter
-                ),
-            }
+            "risk": rr_result.risk,
 
-            rr_summary = resume_rr(
-                rr_object
-            )
+            "tp1": rr_result.tp1,
+            "tp2": rr_result.tp2,
+            "tp3": rr_result.tp3,
 
-        except Exception as exc:
+            "reward_tp1": rr_result.reward_tp1,
+            "reward_tp2": rr_result.reward_tp2,
+            "reward_tp3": rr_result.reward_tp3,
 
-            logger.warning(
-                "Calcul RR impossible : %s",
-                exc,
-            )
+            "rr_tp1": rr_result.rr_tp1,
+            "rr_tp2": rr_result.rr_tp2,
+            "rr_tp3": rr_result.rr_tp3,
+
+            "minimum_rr": rr_result.minimum_rr,
+
+            "passes_rr_filter": (
+                rr_result.passes_rr_filter
+            ),
+        }
+
+    except Exception as exc:
+
+        logger.exception(
+            "Erreur calcul RR."
+        )
+
+        return {
+            "status": "RR_ERROR",
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "score": score_result,
+            "error": str(exc),
+            "analyses": analyses,
+        }
 
     # ========================================================
     # FILTRE QUALITÉ
     # ========================================================
 
-    quality = filtrer_qualite(
+    quality_result = filtrer_qualite(
         direction=direction,
 
-        score_result=score,
+        score_result=score_result,
 
-        rr_result=rr_result,
+        rr_result=rr_data,
 
-        h4_bias=h4_bias,
-        h1_bias=h1_bias,
-        m15_bias=m15_bias,
-        m5_bias=m5_bias,
+        h4_bias=h4.get(
+            "bias"
+        ),
+
+        h1_bias=h1.get(
+            "bias"
+        ),
+
+        m15_bias=m15.get(
+            "bias"
+        ),
+
+        m5_bias=m5.get(
+            "bias"
+        ),
 
         news=None,
 
-        minimum_score=minimum_score,
-        minimum_rr=minimum_rr,
+        minimum_score=DEFAULT_MIN_SCORE,
+
+        minimum_rr=DEFAULT_MIN_RR,
     )
 
     # ========================================================
-    # RÉSULTAT
+    # RÉSULTAT FINAL
     # ========================================================
 
-    result = {
-        "symbol": symbol,
-        "timeframe": timeframe,
+    status = quality_result.get(
+        "status",
+        "REJECT",
+    )
 
-        "status": quality["status"],
+    result = {
+        "status": status,
+
+        "symbol": symbol,
 
         "direction": direction,
 
-        "price": price,
+        "entry": entry,
 
-        "h4_bias": h4_bias,
-        "h1_bias": h1_bias,
-        "m15_bias": m15_bias,
-        "m5_bias": m5_bias,
+        "stop_loss": stop_loss,
 
-        "h4": h4,
-        "h1": h1,
-        "m15": m15,
-        "m5": m5,
+        "score": score_result,
 
-        "fibonacci": fibonacci,
+        "rr": rr_data,
 
-        "indicators": indicators,
+        "quality": quality_result,
 
-        "score": score,
+        "indicators": indicator_context,
 
-        "rr": rr_result,
-        "rr_summary": rr_summary,
+        "fibonacci": fibonacci_analysis,
 
-        "quality": quality,
+        "analyses": analyses,
 
         "ready_for_signal": (
-            quality["ready_for_signal"]
+            quality_result.get(
+                "ready_for_signal",
+                False,
+            )
         ),
     }
 
     logger.info(
-        "Analyse terminée | %s | score=%s | RR=%s | status=%s",
-        direction,
-        score.get("final_score"),
-        rr_result.get("rr_tp2"),
-        quality.get("status"),
+        "Analyse terminée : %s | %s | score=%s | RR=%.2f",
+        symbol,
+        status,
+        score_result.get(
+            "final_score"
+        ),
+        rr_data.get(
+            "rr_tp2",
+            0,
+        ),
     )
 
     return result
 
 
 # ============================================================
-# INTERFACE PUBLIQUE
+# ALIAS COMPATIBILITÉ
 # ============================================================
 
-def analyser(
+def analyse(
     symbol: str = DEFAULT_SYMBOL,
-    timeframe: str = DEFAULT_TIMEFRAME,
 ) -> Dict[str, Any]:
     """
-    Interface publique simplifiée.
+    Alias public de analyser_marche().
     """
 
     return analyser_marche(
-        symbol=symbol,
-        timeframe=timeframe,
+        symbol
     )
 
 
 # ============================================================
-# TEST INTERNE
+# TEST
 # ============================================================
 
 def _run_internal_test() -> None:
     """
-    Test structurel du module.
+    Test minimal du module.
 
-    Le test vérifie uniquement les fonctions locales
-    qui ne nécessitent pas d'appel API.
+    Ce test vérifie surtout que les fonctions
+    utilitaires fonctionnent sans appeler l'API.
     """
 
     assert _normalize_direction(
@@ -1090,48 +1127,34 @@ def _run_internal_test() -> None:
         "SELL"
     ) == SELL
 
-    assert _normalize_bias(
-        "bullish"
-    ) == "bullish"
+    assert _normalize_direction(
+        "xxx"
+    ) == NEUTRAL
 
-    assert _normalize_bias(
-        "bearish"
-    ) == "bearish"
+    assert _safe_float(
+        "100.5"
+    ) == 100.5
 
-    assert _normalize_bias(
-        None
-    ) == "neutral"
+    indicators = (
+        construire_contexte_indicateurs(
+            {
+                "ema20": 2000,
+                "ema50": 1990,
+                "rsi": 55,
+            },
+            BUY,
+        )
+    )
 
-    assert _determiner_direction(
-        "bullish",
-        "bullish",
-        "bullish",
-    ) == BUY
+    assert (
+        indicators["ema_context"]
+        == "bullish"
+    )
 
-    assert _determiner_direction(
-        "bearish",
-        "bearish",
-        "bearish",
-    ) == SELL
-
-    candles = [
-        {
-            "open": 100,
-            "high": 105,
-            "low": 95,
-            "close": 102,
-        },
-        {
-            "open": 102,
-            "high": 108,
-            "low": 99,
-            "close": 106,
-        },
-    ]
-
-    assert _extract_latest_close(
-        candles
-    ) == 106.0
+    assert (
+        indicators["rsi_context"]
+        == "bullish_bias"
+    )
 
     logger.info(
         "Test analyse.py réussi."
@@ -1153,9 +1176,7 @@ if __name__ == "__main__":
     )
 
     print("=" * 60)
-    print(
-        "VISION TRADE AI V2 - TEST ANALYSE"
-    )
+    print("VISION TRADE AI V2 - TEST ANALYSE")
     print("=" * 60)
 
     try:
