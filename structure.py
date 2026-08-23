@@ -39,9 +39,16 @@ DEFAULT_SWING_LOOKBACK = 2
 DEFAULT_FVG_MIN_SIZE = 0.0
 DEFAULT_OB_LOOKBACK = 10
 
+# Tolérance utilisée pour regrouper les niveaux
+# de liquidité proches sur XAU/USD.
+DEFAULT_LIQUIDITY_TOLERANCE = 0.05
+
 BULLISH = "bullish"
 BEARISH = "bearish"
 NEUTRAL = "neutral"
+
+BUY_SIDE = "buy_side"
+SELL_SIDE = "sell_side"
 
 
 # ============================================================
@@ -160,7 +167,7 @@ class LiquiditySweep:
 
 
 # ============================================================
-# SWINGS
+# SWING HIGH
 # ============================================================
 
 def detecter_swing_highs(
@@ -170,7 +177,7 @@ def detecter_swing_highs(
     """
     Détecte les Swing High.
 
-    Un sommet est considéré comme swing high si son plus haut
+    Un sommet est considéré comme Swing High si son high
     est supérieur ou égal aux highs des bougies voisines.
     """
 
@@ -181,7 +188,7 @@ def detecter_swing_highs(
             "lookback doit être >= 1."
         )
 
-    swings = []
+    swings: List[SwingPoint] = []
 
     for i in range(
         lookback,
@@ -237,6 +244,10 @@ def detecter_swing_highs(
     return swings
 
 
+# ============================================================
+# SWING LOW
+# ============================================================
+
 def detecter_swing_lows(
     candles: Sequence[dict],
     lookback: int = DEFAULT_SWING_LOOKBACK,
@@ -252,7 +263,7 @@ def detecter_swing_lows(
             "lookback doit être >= 1."
         )
 
-    swings = []
+    swings: List[SwingPoint] = []
 
     for i in range(
         lookback,
@@ -308,12 +319,16 @@ def detecter_swing_lows(
     return swings
 
 
+# ============================================================
+# SWINGS
+# ============================================================
+
 def detecter_swings(
     candles: Sequence[dict],
     lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> Dict[str, List[SwingPoint]]:
     """
-    Retourne les swings hauts et bas.
+    Retourne les Swing High et Swing Low.
     """
 
     return {
@@ -339,32 +354,27 @@ def classifier_swings(
     """
     Classe les swings en :
 
-        HH
-        LH
-        HL
-        LL
+    HH = Higher High
+    HL = Higher Low
+    LH = Lower High
+    LL = Lower Low
     """
 
-    points = []
+    points: List[SwingPoint] = []
 
-    for swing in swing_highs:
-        points.append(swing)
-
-    for swing in swing_lows:
-        points.append(swing)
+    points.extend(swing_highs)
+    points.extend(swing_lows)
 
     points.sort(
         key=lambda point: point.index
     )
 
-    previous_high = None
-    previous_low = None
+    previous_high: Optional[SwingPoint] = None
+    previous_low: Optional[SwingPoint] = None
 
-    result = []
+    result: List[Dict[str, Any]] = []
 
     for swing in points:
-
-        label = None
 
         if swing.type == "high":
 
@@ -417,16 +427,16 @@ def detecter_bos(
     """
     Détecte les Break Of Structure.
 
-    BOS haussier :
-        clôture au-dessus d'un swing high.
+    BOS bullish :
+        clôture au-dessus d'un Swing High.
 
-    BOS baissier :
-        clôture sous un swing low.
+    BOS bearish :
+        clôture sous un Swing Low.
     """
 
     _validate_candles(candles)
 
-    events = []
+    events: List[StructureBreak] = []
 
     broken_highs = set()
     broken_lows = set()
@@ -439,7 +449,7 @@ def detecter_bos(
         )
 
         # ----------------------------------------------------
-        # BOS HAUSSIER
+        # BOS BULLISH
         # ----------------------------------------------------
 
         for swing in swing_highs:
@@ -467,7 +477,7 @@ def detecter_bos(
                 )
 
         # ----------------------------------------------------
-        # BOS BAISSIER
+        # BOS BEARISH
         # ----------------------------------------------------
 
         for swing in swing_lows:
@@ -513,21 +523,21 @@ def detecter_choch(
     """
     Détecte les changements de caractère.
 
-    Tendance haussière + cassure du dernier low
-        -> CHoCH bearish
+    Haussier + cassure du dernier low :
+        CHoCH bearish.
 
-    Tendance baissière + cassure du dernier high
-        -> CHoCH bullish
+    Baissier + cassure du dernier high :
+        CHoCH bullish.
     """
 
     _validate_candles(candles)
 
-    events = []
+    events: List[StructureBreak] = []
 
     structure_bias = NEUTRAL
 
-    last_high = None
-    last_low = None
+    last_high: Optional[SwingPoint] = None
+    last_low: Optional[SwingPoint] = None
 
     highs = sorted(
         swing_highs,
@@ -548,6 +558,7 @@ def detecter_choch(
             high_cursor < len(highs)
             and highs[high_cursor].index < i
         ):
+
             last_high = highs[high_cursor]
             high_cursor += 1
 
@@ -555,6 +566,7 @@ def detecter_choch(
             low_cursor < len(lows)
             and lows[low_cursor].index < i
         ):
+
             last_low = lows[low_cursor]
             low_cursor += 1
 
@@ -608,7 +620,7 @@ def detecter_choch(
             structure_bias = BULLISH
 
         # ----------------------------------------------------
-        # INITIALISATION DU BIAIS
+        # PREMIER BIAIS
         # ----------------------------------------------------
 
         elif (
@@ -642,11 +654,11 @@ def detecter_order_blocks(
     """
     Détecte les Order Blocks associés aux cassures.
 
-    BOS bullish :
-        dernière bougie baissière avant la cassure.
+    BOS/CHoCH bullish :
+        dernière bougie bearish avant la cassure.
 
-    BOS bearish :
-        dernière bougie haussière avant la cassure.
+    BOS/CHoCH bearish :
+        dernière bougie bullish avant la cassure.
     """
 
     _validate_candles(candles)
@@ -656,7 +668,7 @@ def detecter_order_blocks(
             "lookback doit être >= 1."
         )
 
-    order_blocks = []
+    order_blocks: List[OrderBlock] = []
 
     for event in structure_breaks:
 
@@ -749,10 +761,10 @@ def detecter_order_blocks(
 def _deduplicate_order_blocks(
     order_blocks: Sequence[OrderBlock],
 ) -> List[OrderBlock]:
-    """Supprime les OB identiques."""
+    """Supprime les Order Blocks identiques."""
 
     seen = set()
-    result = []
+    result: List[OrderBlock] = []
 
     for ob in order_blocks:
 
@@ -795,7 +807,7 @@ def detecter_fvg(
             "min_size doit être >= 0."
         )
 
-    fvgs = []
+    fvgs: List[FairValueGap] = []
 
     for i in range(
         2,
@@ -826,7 +838,7 @@ def detecter_fvg(
         )
 
         # ----------------------------------------------------
-        # FVG BULLISH
+        # BULLISH FVG
         # ----------------------------------------------------
 
         if low_3 > high_1:
@@ -846,7 +858,7 @@ def detecter_fvg(
                 )
 
         # ----------------------------------------------------
-        # FVG BEARISH
+        # BEARISH FVG
         # ----------------------------------------------------
 
         elif high_3 < low_1:
@@ -879,19 +891,29 @@ def _group_nearby_levels(
     """
     Regroupe les swings proches afin de détecter
     les zones potentielles de liquidité.
+
+    Les points sont regroupés uniquement lorsqu'ils
+    appartiennent au même type :
+        highs  -> buy-side
+        lows   -> sell-side
     """
 
     if not points:
         return []
+
+    if tolerance < 0:
+        raise ValueError(
+            "tolerance doit être >= 0."
+        )
 
     sorted_points = sorted(
         points,
         key=lambda point: point.price,
     )
 
-    groups = []
+    groups: List[List[SwingPoint]] = []
 
-    current_group = [
+    current_group: List[SwingPoint] = [
         sorted_points[0]
     ]
 
@@ -909,9 +931,7 @@ def _group_nearby_levels(
             point.price - reference_price
         ) <= tolerance:
 
-            current_group.append(
-                point
-            )
+            current_group.append(point)
 
         else:
 
@@ -927,11 +947,24 @@ def _group_nearby_levels(
         current_group
     )
 
-    levels = []
+    levels: List[LiquidityLevel] = []
 
     for group in groups:
 
+        # Il faut au minimum deux swings
+        # pour considérer une zone comme
+        # liquidité significative.
         if len(group) < 2:
+            continue
+
+        point_type = group[0].type
+
+        # Sécurité : un groupe ne doit pas
+        # mélanger highs et lows.
+        if any(
+            point.type != point_type
+            for point in group
+        ):
             continue
 
         average_price = (
@@ -942,26 +975,20 @@ def _group_nearby_levels(
             / len(group)
         )
 
-        # ----------------------------------------------------
-        # IMPORTANT :
-        # Tous les points d'un groupe doivent être du même
-        # type puisque highs et lows sont traités séparément.
-        # ----------------------------------------------------
-
         direction = (
-            "buy_side"
-            if group[0].type == "high"
-            else "sell_side"
+            BUY_SIDE
+            if point_type == "high"
+            else SELL_SIDE
         )
 
         levels.append(
             LiquidityLevel(
                 price=average_price,
                 direction=direction,
-                source_indices=[
+                source_indices=sorted(
                     point.index
                     for point in group
-                ],
+                ),
                 strength=len(group),
             )
         )
@@ -972,10 +999,17 @@ def _group_nearby_levels(
 def detecter_liquidite(
     swing_highs: Sequence[SwingPoint],
     swing_lows: Sequence[SwingPoint],
-    tolerance: float,
+    tolerance: float = DEFAULT_LIQUIDITY_TOLERANCE,
 ) -> List[LiquidityLevel]:
     """
-    Détecte les zones où plusieurs swings se concentrent.
+    Détecte les zones où plusieurs swings
+    se concentrent.
+
+    Highs :
+        buy-side liquidity.
+
+    Lows :
+        sell-side liquidity.
     """
 
     if tolerance < 0:
@@ -997,7 +1031,7 @@ def detecter_liquidite(
 
 
 # ============================================================
-# LIQUIDITY SWEEP
+# LIQUIDITY SWEEPS
 # ============================================================
 
 def detecter_liquidity_sweeps(
@@ -1005,32 +1039,29 @@ def detecter_liquidity_sweeps(
     liquidity_levels: Sequence[LiquidityLevel],
 ) -> List[LiquiditySweep]:
     """
-    Détecte les véritables sweeps de liquidité.
+    Détecte les vrais sweeps de liquidité.
+
+    IMPORTANT :
+    ----------------------------------------------------------
+    Un niveau ne peut être utilisé que lorsqu'il est déjà
+    connu du marché.
+
+    Donc :
+        max(source_indices) < index de la bougie
+
+    est obligatoire.
+
+    Ensuite, lorsqu'un niveau est sweepé, il est considéré
+    comme consommé et ne peut plus générer un deuxième sweep
+    dans la même analyse.
 
     Buy-side sweep :
-        le prix dépasse un high de liquidité
-        puis clôture sous ce niveau.
+        high > niveau
+        ET close < niveau
 
     Sell-side sweep :
-        le prix passe sous un low de liquidité
-        puis clôture au-dessus.
-
-    PROTECTION ANTI-RÉPÉTITION :
-
-        Un niveau qui vient d'être sweepé est verrouillé.
-
-        Buy-side :
-            après un sweep bearish, il faut qu'une bougie
-            clôture de nouveau AU-DESSUS du niveau avant
-            d'autoriser un nouveau sweep.
-
-        Sell-side :
-            après un sweep bullish, il faut qu'une bougie
-            clôture de nouveau EN-DESSOUS du niveau avant
-            d'autoriser un nouveau sweep.
-
-    Cette logique empêche une seule zone de liquidité de
-    produire des centaines de sweeps artificiels.
+        low < niveau
+        ET close > niveau
     """
 
     _validate_candles(candles)
@@ -1038,18 +1069,19 @@ def detecter_liquidity_sweeps(
     sweeps: List[LiquiditySweep] = []
 
     # --------------------------------------------------------
-    # État de chaque niveau.
+    # Niveaux déjà consommés.
     #
-    # False = disponible
-    # True  = verrouillé après un sweep
+    # On utilise l'identité du niveau :
+    # direction + source_indices.
     # --------------------------------------------------------
 
-    level_locked = {
-        index: False
-        for index in range(
-            len(liquidity_levels)
-        )
-    }
+    consumed_levels = set()
+
+    # --------------------------------------------------------
+    # Parcours chronologique.
+    #
+    # Très important pour éviter le look-ahead bias.
+    # --------------------------------------------------------
 
     for i, candle in enumerate(candles):
 
@@ -1068,101 +1100,137 @@ def detecter_liquidity_sweeps(
             "close",
         )
 
-        for level_index, level in enumerate(
-            liquidity_levels
-        ):
+        for level in liquidity_levels:
+
+            source_indices = tuple(
+                sorted(
+                    level.source_indices
+                )
+            )
+
+            level_key = (
+                level.direction,
+                source_indices,
+            )
 
             # ------------------------------------------------
-            # Ne pas utiliser une bougie appartenant
-            # directement à la création du niveau.
+            # Le niveau a déjà été sweepé.
             # ------------------------------------------------
 
-            if i in level.source_indices:
+            if level_key in consumed_levels:
                 continue
 
-            price = level.price
+            # ------------------------------------------------
+            # Le niveau n'est pas encore connu.
+            #
+            # On interdit donc l'utilisation d'un niveau
+            # provenant du futur.
+            # ------------------------------------------------
 
-            # =================================================
-            # BUY-SIDE
-            # =================================================
+            if not source_indices:
+                continue
 
-            if level.direction == "buy_side":
+            if max(source_indices) >= i:
+                continue
 
-                # ------------------------------------------------
-                # Niveau verrouillé :
-                # on attend une clôture au-dessus.
-                # ------------------------------------------------
+            # ------------------------------------------------
+            # BUY-SIDE LIQUIDITY
+            #
+            # Sweep bearish :
+            # le prix prend les highs puis clôture dessous.
+            # ------------------------------------------------
 
-                if level_locked[level_index]:
-
-                    if close > price:
-                        level_locked[level_index] = False
-
-                    continue
-
-                # ------------------------------------------------
-                # Sweep bearish :
-                # le prix prend le high puis clôture sous le niveau.
-                # ------------------------------------------------
+            if level.direction == BUY_SIDE:
 
                 if (
-                    high > price
-                    and close < price
+                    high > level.price
+                    and close < level.price
                 ):
 
                     sweeps.append(
                         LiquiditySweep(
                             index=i,
                             direction=BEARISH,
-                            liquidity_price=price,
+                            liquidity_price=level.price,
                             candle_high=high,
                             candle_low=low,
                         )
                     )
 
-                    level_locked[level_index] = True
+                    # Niveau consommé.
+                    consumed_levels.add(
+                        level_key
+                    )
 
-            # =================================================
-            # SELL-SIDE
-            # =================================================
+            # ------------------------------------------------
+            # SELL-SIDE LIQUIDITY
+            #
+            # Sweep bullish :
+            # le prix prend les lows puis clôture dessus.
+            # ------------------------------------------------
 
-            elif level.direction == "sell_side":
-
-                # ------------------------------------------------
-                # Niveau verrouillé :
-                # on attend une clôture sous le niveau.
-                # ------------------------------------------------
-
-                if level_locked[level_index]:
-
-                    if close < price:
-                        level_locked[level_index] = False
-
-                    continue
-
-                # ------------------------------------------------
-                # Sweep bullish :
-                # le prix prend le low puis clôture au-dessus.
-                # ------------------------------------------------
+            elif level.direction == SELL_SIDE:
 
                 if (
-                    low < price
-                    and close > price
+                    low < level.price
+                    and close > level.price
                 ):
 
                     sweeps.append(
                         LiquiditySweep(
                             index=i,
                             direction=BULLISH,
-                            liquidity_price=price,
+                            liquidity_price=level.price,
                             candle_high=high,
                             candle_low=low,
                         )
                     )
 
-                    level_locked[level_index] = True
+                    # Niveau consommé.
+                    consumed_levels.add(
+                        level_key
+                    )
 
-    return sweeps
+    return _deduplicate_liquidity_sweeps(
+        sweeps
+    )
+
+
+def _deduplicate_liquidity_sweeps(
+    sweeps: Sequence[LiquiditySweep],
+) -> List[LiquiditySweep]:
+    """
+    Sécurité supplémentaire contre les doublons.
+
+    Deux sweeps identiques sur :
+        - même index
+        - même direction
+        - même niveau
+
+    ne sont conservés qu'une seule fois.
+    """
+
+    seen = set()
+    result: List[LiquiditySweep] = []
+
+    for sweep in sweeps:
+
+        key = (
+            sweep.index,
+            sweep.direction,
+            round(
+                sweep.liquidity_price,
+                5,
+            ),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(sweep)
+
+    return result
 
 
 # ============================================================
@@ -1218,7 +1286,7 @@ def analyser_structure(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     ob_lookback: int = DEFAULT_OB_LOOKBACK,
     fvg_min_size: float = DEFAULT_FVG_MIN_SIZE,
-    liquidity_tolerance: float = 0.0,
+    liquidity_tolerance: float = DEFAULT_LIQUIDITY_TOLERANCE,
 ) -> Dict[str, Any]:
     """
     Analyse complète de la structure du marché.
@@ -1268,7 +1336,7 @@ def analyser_structure(
     )
 
     # --------------------------------------------------------
-    # CASSURES STRUCTURELLES
+    # STRUCTURE BREAKS
     # --------------------------------------------------------
 
     structure_breaks = (
@@ -1431,7 +1499,7 @@ def analyser_structure_multi_tf(
     Chaque timeframe est analysé indépendamment.
     """
 
-    result = {}
+    result: Dict[str, Dict[str, Any]] = {}
 
     for timeframe, candles in data.items():
 
@@ -1551,11 +1619,11 @@ def _generate_test_candles(
     count: int = 80,
 ) -> List[dict]:
     """
-    Génère des bougies synthétiques uniquement pour
-    tester le moteur structurel.
+    Génère des bougies synthétiques uniquement
+    pour tester le moteur structurel.
     """
 
-    candles = []
+    candles: List[dict] = []
 
     base = 100.0
 
@@ -1670,7 +1738,7 @@ if __name__ == "__main__":
 
         _run_internal_test()
 
-        print("\n✅ STRUCTURE : OK")
+        print("\nSTRUCTURE : OK")
 
         print(
             "Swing / BOS / CHoCH / OB / FVG / "
@@ -1679,5 +1747,5 @@ if __name__ == "__main__":
 
     except Exception as exc:
 
-        print("\n❌ TEST STRUCTURE ÉCHOUÉ")
+        print("\nTEST STRUCTURE ÉCHOUÉ")
         print(f"Erreur : {exc}")
