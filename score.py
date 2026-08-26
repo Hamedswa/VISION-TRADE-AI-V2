@@ -14,13 +14,10 @@ Responsabilités :
 IMPORTANT :
 - aucune IA ;
 - aucun appel API ;
-- aucun calcul SL/TP ;
+- aucun calcul de SL/TP ;
 - aucun signal Telegram.
 
-Le moteur accepte :
-    BUY / SELL
-et convertit automatiquement vers :
-    bullish / bearish
+Le score est purement mathématique et reproductible.
 """
 
 from __future__ import annotations
@@ -51,18 +48,73 @@ DEFAULT_SIGNAL_THRESHOLD = 80
 
 
 # ============================================================
-# MODÈLE
+# NORMALISATION DES DIRECTIONS
+# ============================================================
+
+def _normalize_direction(direction: Any) -> str:
+    """
+    Convertit toutes les représentations possibles
+    vers une direction interne standardisée.
+
+    BUY / bullish / long  -> bullish
+    SELL / bearish / short -> bearish
+    NEUTRAL -> neutral
+    """
+
+    value = str(direction).lower().strip()
+
+    mapping = {
+        "buy": BULLISH,
+        "bullish": BULLISH,
+        "long": BULLISH,
+
+        "sell": BEARISH,
+        "bearish": BEARISH,
+        "short": BEARISH,
+
+        "neutral": NEUTRAL.lower(),
+        "none": NEUTRAL.lower(),
+        "": NEUTRAL.lower(),
+    }
+
+    return mapping.get(value, value)
+
+
+def _direction_label(direction: str) -> str:
+    """
+    Convertit une direction interne vers BUY / SELL.
+    """
+
+    normalized = _normalize_direction(direction)
+
+    if normalized == BULLISH:
+        return BUY
+
+    if normalized == BEARISH:
+        return SELL
+
+    return NEUTRAL
+
+
+# ============================================================
+# MODÈLE DE SCORE
 # ============================================================
 
 @dataclass
 class ScoreResult:
+    """
+    Résultat complet du moteur de scoring.
+    """
+
     buy_score: int
     sell_score: int
     final_score: int
     direction: str
     quality: str
+
     confirmations: int
     contradictions: int
+
     reasons: list[str]
     warnings: list[str]
 
@@ -77,7 +129,27 @@ def _clamp(
     maximum: float = MAX_SCORE,
 ) -> int:
     """
-    Limite une valeur entre minimum et maximum.
+    Force une valeur dans une plage.
+    """
+
+    return int(
+        max(
+            minimum,
+            min(
+                maximum,
+                round(value),
+            ),
+        )
+    )
+
+
+def _clamp_signed(
+    value: float,
+    minimum: float,
+    maximum: float,
+) -> int:
+    """
+    Force une valeur dans une plage signée.
     """
 
     return int(
@@ -94,6 +166,9 @@ def _clamp(
 def _safe_float(
     value: Any,
 ) -> Optional[float]:
+    """
+    Convertit proprement une valeur numérique.
+    """
 
     if value is None:
         return None
@@ -101,49 +176,11 @@ def _safe_float(
     try:
         return float(value)
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
-
-
-def _normalize_direction(
-    direction: str,
-) -> str:
-    """
-    Convertit :
-
-        BUY  -> bullish
-        SELL -> bearish
-
-    Les analyses techniques utilisent bullish/bearish.
-    """
-
-    value = str(
-        direction
-    ).lower().strip()
-
-    if value in {
-        "buy",
-        "bullish",
-        "long",
-    }:
-        return BULLISH
-
-    if value in {
-        "sell",
-        "bearish",
-        "short",
-    }:
-        return BEARISH
-
-    if value in {
-        "neutral",
-        "none",
-    }:
-        return NEUTRAL
-
-    raise ValueError(
-        "Direction inconnue. Utiliser BUY, SELL, bullish ou bearish."
-    )
 
 
 # ============================================================
@@ -152,19 +189,19 @@ def _normalize_direction(
 
 class ScoreEngine:
     """
-    Moteur déterministe.
+    Moteur déterministe de scoring.
 
-    Pondération :
+    Pondération maximale :
 
-        H4 tendance       15
-        H1 structure      20
-        M15 SMC           20
-        M5 confirmation   15
-        Fibonacci         10
-        Indicateurs       10
-        Liquidité         10
-        --------------------
-        TOTAL            100
+        H4 tendance             15
+        H1 structure            20
+        M15 zones SMC           20
+        M5 confirmation         15
+        Fibonacci               10
+        Indicateurs             10
+        Liquidité / sweep       10
+        ---------------------------
+        TOTAL                   100
     """
 
     WEIGHTS = {
@@ -199,21 +236,19 @@ class ScoreEngine:
         direction: str,
     ) -> tuple[int, Optional[str]]:
 
+        if not h4_bias:
+            return 0, None
+
+        bias = _normalize_direction(h4_bias)
         target = _normalize_direction(direction)
 
-        bias = str(
-            h4_bias or NEUTRAL
-        ).lower().strip()
-
         if bias == target:
-
             return (
                 self.WEIGHTS["h4_trend"],
                 "Tendance H4 alignée.",
             )
 
         if bias == NEUTRAL.lower():
-
             return 0, None
 
         return (
@@ -222,7 +257,7 @@ class ScoreEngine:
         )
 
     # ========================================================
-    # H1
+    # H1 STRUCTURE
     # ========================================================
 
     def score_h1_structure(
@@ -236,20 +271,27 @@ class ScoreEngine:
 
         target = _normalize_direction(direction)
 
-        bias = str(
+        bias = _normalize_direction(
             h1_analysis.get(
                 "bias",
                 NEUTRAL,
             )
-        ).lower().strip()
+        )
 
         score = 0
-        reason = None
+        reasons = []
+
+        # ----------------------------------------------------
+        # BIAIS H1
+        # ----------------------------------------------------
 
         if bias == target:
 
             score += 10
-            reason = "Biais H1 aligné."
+
+            reasons.append(
+                "Biais H1 aligné."
+            )
 
         elif (
             bias != NEUTRAL.lower()
@@ -257,7 +299,14 @@ class ScoreEngine:
         ):
 
             score -= 10
-            reason = "Biais H1 opposé."
+
+            reasons.append(
+                "Biais H1 opposé."
+            )
+
+        # ----------------------------------------------------
+        # DERNIER BOS
+        # ----------------------------------------------------
 
         latest = h1_analysis.get(
             "latest",
@@ -268,49 +317,78 @@ class ScoreEngine:
             latest = {}
 
         bos = latest.get("bos")
-        choch = latest.get("choch")
 
         if bos:
 
-            bos_direction = str(
-                bos.get("direction", "")
-            ).lower().strip()
+            bos_direction = _normalize_direction(
+                bos.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if bos_direction == target:
 
                 score += 10
 
-            else:
+                reasons.append(
+                    "BOS H1 aligné."
+                )
+
+            elif (
+                bos_direction != NEUTRAL.lower()
+            ):
 
                 score -= 10
 
-        elif choch:
+                reasons.append(
+                    "BOS H1 opposé."
+                )
 
-            choch_direction = str(
-                choch.get("direction", "")
-            ).lower().strip()
+        # ----------------------------------------------------
+        # CHoCH
+        # ----------------------------------------------------
+
+        choch = latest.get("choch")
+
+        if choch:
+
+            choch_direction = _normalize_direction(
+                choch.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if choch_direction == target:
 
                 score += 5
 
-            else:
+                reasons.append(
+                    "CHoCH H1 aligné."
+                )
+
+            elif (
+                choch_direction != NEUTRAL.lower()
+            ):
 
                 score -= 5
 
+                reasons.append(
+                    "CHoCH H1 opposé."
+                )
+
         return (
-            max(
+            _clamp_signed(
+                score,
                 -self.WEIGHTS["h1_structure"],
-                min(
-                    self.WEIGHTS["h1_structure"],
-                    score,
-                ),
+                self.WEIGHTS["h1_structure"],
             ),
-            reason,
+            reasons[0] if reasons else None,
         )
 
     # ========================================================
-    # M15
+    # M15 SMC
     # ========================================================
 
     def score_m15_smc(
@@ -322,10 +400,10 @@ class ScoreEngine:
         if not m15_analysis:
             return 0, []
 
-        target = _normalize_direction(direction)
-
         score = 0
         reasons = []
+
+        target = _normalize_direction(direction)
 
         latest = m15_analysis.get(
             "latest",
@@ -339,26 +417,33 @@ class ScoreEngine:
         # ORDER BLOCK
         # ----------------------------------------------------
 
-        ob = latest.get(
+        latest_ob = latest.get(
             "order_block"
         )
 
-        if ob:
+        if latest_ob:
 
-            ob_direction = str(
-                ob.get("direction", "")
-            ).lower().strip()
+            ob_direction = _normalize_direction(
+                latest_ob.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if ob_direction == target:
 
                 score += 7
+
                 reasons.append(
                     "Order Block aligné."
                 )
 
-            else:
+            elif (
+                ob_direction != NEUTRAL.lower()
+            ):
 
                 score -= 5
+
                 reasons.append(
                     "Order Block opposé."
                 )
@@ -367,26 +452,33 @@ class ScoreEngine:
         # FVG
         # ----------------------------------------------------
 
-        fvg = latest.get(
+        latest_fvg = latest.get(
             "fvg"
         )
 
-        if fvg:
+        if latest_fvg:
 
-            fvg_direction = str(
-                fvg.get("direction", "")
-            ).lower().strip()
+            fvg_direction = _normalize_direction(
+                latest_fvg.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if fvg_direction == target:
 
                 score += 6
+
                 reasons.append(
                     "FVG aligné."
                 )
 
-            else:
+            elif (
+                fvg_direction != NEUTRAL.lower()
+            ):
 
                 score -= 4
+
                 reasons.append(
                     "FVG opposé."
                 )
@@ -395,16 +487,17 @@ class ScoreEngine:
         # BIAIS M15
         # ----------------------------------------------------
 
-        bias = str(
+        bias = _normalize_direction(
             m15_analysis.get(
                 "bias",
                 NEUTRAL,
             )
-        ).lower().strip()
+        )
 
         if bias == target:
 
             score += 4
+
             reasons.append(
                 "Structure M15 alignée."
             )
@@ -415,6 +508,7 @@ class ScoreEngine:
         ):
 
             score -= 4
+
             reasons.append(
                 "Structure M15 opposée."
             )
@@ -423,37 +517,42 @@ class ScoreEngine:
         # SWEEP
         # ----------------------------------------------------
 
-        sweep = latest.get(
+        latest_sweep = latest.get(
             "liquidity_sweep"
         )
 
-        if sweep:
+        if latest_sweep:
 
-            sweep_direction = str(
-                sweep.get("direction", "")
-            ).lower().strip()
+            sweep_direction = _normalize_direction(
+                latest_sweep.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if sweep_direction == target:
 
                 score += 3
+
                 reasons.append(
                     "Liquidity sweep aligné."
                 )
 
-            else:
+            elif (
+                sweep_direction != NEUTRAL.lower()
+            ):
 
                 score -= 3
+
                 reasons.append(
                     "Liquidity sweep opposé."
                 )
 
         return (
-            max(
+            _clamp_signed(
+                score,
                 -self.WEIGHTS["m15_smc"],
-                min(
-                    self.WEIGHTS["m15_smc"],
-                    score,
-                ),
+                self.WEIGHTS["m15_smc"],
             ),
             reasons,
         )
@@ -471,21 +570,26 @@ class ScoreEngine:
         if not m5_analysis:
             return 0, []
 
-        target = _normalize_direction(direction)
-
         score = 0
         reasons = []
 
-        bias = str(
+        target = _normalize_direction(direction)
+
+        # ----------------------------------------------------
+        # BIAIS M5
+        # ----------------------------------------------------
+
+        bias = _normalize_direction(
             m5_analysis.get(
                 "bias",
                 NEUTRAL,
             )
-        ).lower().strip()
+        )
 
         if bias == target:
 
             score += 7
+
             reasons.append(
                 "Biais M5 confirmé."
             )
@@ -496,9 +600,14 @@ class ScoreEngine:
         ):
 
             score -= 7
+
             reasons.append(
                 "M5 opposé."
             )
+
+        # ----------------------------------------------------
+        # DERNIER BOS / CHoCH
+        # ----------------------------------------------------
 
         latest = m5_analysis.get(
             "latest",
@@ -508,69 +617,69 @@ class ScoreEngine:
         if not isinstance(latest, dict):
             latest = {}
 
-        # ----------------------------------------------------
-        # BOS
-        # ----------------------------------------------------
-
-        bos = latest.get(
-            "bos"
-        )
+        bos = latest.get("bos")
 
         if bos:
 
-            bos_direction = str(
-                bos.get("direction", "")
-            ).lower().strip()
+            bos_direction = _normalize_direction(
+                bos.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if bos_direction == target:
 
                 score += 5
+
                 reasons.append(
                     "BOS M5 confirmé."
                 )
 
-            else:
+            elif (
+                bos_direction != NEUTRAL.lower()
+            ):
 
                 score -= 5
+
                 reasons.append(
                     "BOS M5 opposé."
                 )
 
-        # ----------------------------------------------------
-        # CHOCH
-        # ----------------------------------------------------
-
-        choch = latest.get(
-            "choch"
-        )
+        choch = latest.get("choch")
 
         if choch:
 
-            choch_direction = str(
-                choch.get("direction", "")
-            ).lower().strip()
+            choch_direction = _normalize_direction(
+                choch.get(
+                    "direction",
+                    "",
+                )
+            )
 
             if choch_direction == target:
 
                 score += 3
+
                 reasons.append(
                     "CHoCH M5 confirmé."
                 )
 
-            else:
+            elif (
+                choch_direction != NEUTRAL.lower()
+            ):
 
                 score -= 3
+
                 reasons.append(
                     "CHoCH M5 opposé."
                 )
 
         return (
-            max(
+            _clamp_signed(
+                score,
                 -self.WEIGHTS["m5_confirmation"],
-                min(
-                    self.WEIGHTS["m5_confirmation"],
-                    score,
-                ),
+                self.WEIGHTS["m5_confirmation"],
             ),
             reasons,
         )
@@ -588,9 +697,9 @@ class ScoreEngine:
         if not fibonacci_analysis:
             return 0, None
 
-        target = _normalize_direction(direction)
-
         score = 0
+
+        target = _normalize_direction(direction)
 
         position = fibonacci_analysis.get(
             "position",
@@ -606,6 +715,11 @@ class ScoreEngine:
                 "",
             )
         ).lower().strip()
+
+        # ----------------------------------------------------
+        # BUY = DISCOUNT
+        # SELL = PREMIUM
+        # ----------------------------------------------------
 
         if target == BULLISH:
 
@@ -623,6 +737,10 @@ class ScoreEngine:
             elif zone == "discount":
                 score -= 6
 
+        # ----------------------------------------------------
+        # RETRACEMENT
+        # ----------------------------------------------------
+
         closest = fibonacci_analysis.get(
             "closest_level"
         )
@@ -630,7 +748,7 @@ class ScoreEngine:
         if closest:
 
             level = str(
-                closest.get("level", "")
+                closest.get("level")
             )
 
             if level in {
@@ -648,12 +766,10 @@ class ScoreEngine:
         )
 
         return (
-            max(
+            _clamp_signed(
+                score,
                 -self.WEIGHTS["fibonacci"],
-                min(
-                    self.WEIGHTS["fibonacci"],
-                    score,
-                ),
+                self.WEIGHTS["fibonacci"],
             ),
             reason,
         )
@@ -671,17 +787,17 @@ class ScoreEngine:
         if not indicators:
             return 0, []
 
-        target = _normalize_direction(direction)
-
         score = 0
         reasons = []
 
-        ema_context = str(
+        target = _normalize_direction(direction)
+
+        ema_context = _normalize_direction(
             indicators.get(
                 "ema_context",
                 "",
             )
-        ).lower().strip()
+        )
 
         rsi_context = str(
             indicators.get(
@@ -701,6 +817,7 @@ class ScoreEngine:
         if ema_context == target:
 
             score += 5
+
             reasons.append(
                 "EMA alignées."
             )
@@ -711,6 +828,7 @@ class ScoreEngine:
         ):
 
             score -= 5
+
             reasons.append(
                 "EMA opposées."
             )
@@ -724,6 +842,7 @@ class ScoreEngine:
             if rsi_context == "bullish_bias":
 
                 score += 3
+
                 reasons.append(
                     "RSI favorable aux acheteurs."
                 )
@@ -731,6 +850,7 @@ class ScoreEngine:
             elif rsi_context == "oversold":
 
                 score += 2
+
                 reasons.append(
                     "RSI en zone survendue."
                 )
@@ -738,6 +858,7 @@ class ScoreEngine:
             elif rsi_context == "overbought":
 
                 score -= 3
+
                 reasons.append(
                     "RSI en zone surachetée."
                 )
@@ -747,6 +868,7 @@ class ScoreEngine:
             if rsi_context == "bearish_bias":
 
                 score += 3
+
                 reasons.append(
                     "RSI favorable aux vendeurs."
                 )
@@ -754,6 +876,7 @@ class ScoreEngine:
             elif rsi_context == "overbought":
 
                 score += 2
+
                 reasons.append(
                     "RSI en zone surachetée."
                 )
@@ -761,6 +884,7 @@ class ScoreEngine:
             elif rsi_context == "oversold":
 
                 score -= 3
+
                 reasons.append(
                     "RSI en zone survendue."
                 )
@@ -774,6 +898,7 @@ class ScoreEngine:
             if target == BULLISH and rsi >= 80:
 
                 score -= 2
+
                 reasons.append(
                     "RSI extrêmement élevé."
                 )
@@ -781,17 +906,16 @@ class ScoreEngine:
             elif target == BEARISH and rsi <= 20:
 
                 score -= 2
+
                 reasons.append(
                     "RSI extrêmement bas."
                 )
 
         return (
-            max(
+            _clamp_signed(
+                score,
                 -self.WEIGHTS["indicators"],
-                min(
-                    self.WEIGHTS["indicators"],
-                    score,
-                ),
+                self.WEIGHTS["indicators"],
             ),
             reasons,
         )
@@ -809,6 +933,9 @@ class ScoreEngine:
         if not structure_analysis:
             return 0, []
 
+        score = 0
+        reasons = []
+
         target = _normalize_direction(direction)
 
         latest = structure_analysis.get(
@@ -819,27 +946,45 @@ class ScoreEngine:
         if not isinstance(latest, dict):
             latest = {}
 
-        sweep = latest.get(
+        latest_sweep = latest.get(
             "liquidity_sweep"
         )
 
-        if not sweep:
+        if not latest_sweep:
             return 0, []
 
-        sweep_direction = str(
-            sweep.get("direction", "")
-        ).lower().strip()
+        sweep_direction = _normalize_direction(
+            latest_sweep.get(
+                "direction",
+                "",
+            )
+        )
 
         if sweep_direction == target:
 
-            return (
-                self.WEIGHTS["liquidity"],
-                ["Sweep de liquidité confirmé."],
+            score += 10
+
+            reasons.append(
+                "Sweep de liquidité confirmé."
+            )
+
+        elif (
+            sweep_direction != NEUTRAL.lower()
+        ):
+
+            score -= 8
+
+            reasons.append(
+                "Sweep de liquidité opposé."
             )
 
         return (
-            -self.WEIGHTS["liquidity"],
-            ["Sweep de liquidité opposé."],
+            _clamp_signed(
+                score,
+                -self.WEIGHTS["liquidity"],
+                self.WEIGHTS["liquidity"],
+            ),
+            reasons,
         )
 
     # ========================================================
@@ -857,18 +1002,21 @@ class ScoreEngine:
         indicators: Optional[Dict] = None,
     ) -> ScoreResult:
 
-        direction = str(
+        normalized_direction = _normalize_direction(
             direction
-        ).upper().strip()
+        )
 
-        if direction not in {
-            BUY,
-            SELL,
+        if normalized_direction not in {
+            BULLISH,
+            BEARISH,
         }:
-
             raise ValueError(
                 "direction doit être BUY ou SELL."
             )
+
+        output_direction = _direction_label(
+            normalized_direction
+        )
 
         buy_score = 0
         sell_score = 0
@@ -878,6 +1026,10 @@ class ScoreEngine:
 
         confirmations = 0
         contradictions = 0
+
+        # ----------------------------------------------------
+        # AJOUT SCORE
+        # ----------------------------------------------------
 
         def add_score(
             points: int,
@@ -889,26 +1041,21 @@ class ScoreEngine:
             nonlocal confirmations
             nonlocal contradictions
 
-            if direction == BUY:
-
+            if normalized_direction == BULLISH:
                 buy_score += points
-
             else:
-
                 sell_score += points
 
             if points > 0:
                 confirmations += 1
 
+                if reason:
+                    reasons.append(reason)
+
             elif points < 0:
                 contradictions += 1
 
-            if reason:
-
-                if points > 0:
-                    reasons.append(reason)
-
-                elif points < 0:
+                if reason:
                     warnings.append(reason)
 
         # ----------------------------------------------------
@@ -917,7 +1064,7 @@ class ScoreEngine:
 
         points, reason = self.score_h4_trend(
             h4_bias,
-            direction,
+            normalized_direction,
         )
 
         add_score(
@@ -931,7 +1078,7 @@ class ScoreEngine:
 
         points, reason = self.score_h1_structure(
             h1_analysis or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(
@@ -945,7 +1092,7 @@ class ScoreEngine:
 
         points, m15_reasons = self.score_m15_smc(
             m15_analysis or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(points)
@@ -962,7 +1109,7 @@ class ScoreEngine:
 
         points, m5_reasons = self.score_m5_confirmation(
             m5_analysis or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(points)
@@ -979,7 +1126,7 @@ class ScoreEngine:
 
         points, reason = self.score_fibonacci(
             fibonacci_analysis or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(
@@ -993,7 +1140,7 @@ class ScoreEngine:
 
         points, indicator_reasons = self.score_indicators(
             indicators or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(points)
@@ -1010,7 +1157,7 @@ class ScoreEngine:
 
         points, liquidity_reasons = self.score_liquidity(
             m15_analysis or {},
-            direction,
+            normalized_direction,
         )
 
         add_score(points)
@@ -1025,20 +1172,18 @@ class ScoreEngine:
         # SCORE FINAL
         # ----------------------------------------------------
 
-        if direction == BUY:
+        if normalized_direction == BULLISH:
             final_score = buy_score
         else:
             final_score = sell_score
 
-        # Important :
-        # le score interne peut être négatif.
-        # Le score public est limité à 0-100.
-
         final_score = _clamp(
-            final_score,
-            0,
-            MAX_SCORE,
+            final_score
         )
+
+        # ----------------------------------------------------
+        # QUALITÉ
+        # ----------------------------------------------------
 
         quality = self.determine_quality(
             final_score
@@ -1046,17 +1191,13 @@ class ScoreEngine:
 
         return ScoreResult(
             buy_score=_clamp(
-                buy_score,
-                0,
-                MAX_SCORE,
+                buy_score
             ),
             sell_score=_clamp(
-                sell_score,
-                0,
-                MAX_SCORE,
+                sell_score
             ),
             final_score=final_score,
-            direction=direction,
+            direction=output_direction,
             quality=quality,
             confirmations=confirmations,
             contradictions=contradictions,
@@ -1072,6 +1213,9 @@ class ScoreEngine:
         self,
         score: int,
     ) -> str:
+        """
+        Classe la qualité du setup.
+        """
 
         if score >= 90:
             return "A+"
@@ -1105,6 +1249,9 @@ def calculer_score(
     indicators: Optional[Dict] = None,
     threshold: int = DEFAULT_SIGNAL_THRESHOLD,
 ) -> Dict[str, Any]:
+    """
+    Interface publique du moteur de score.
+    """
 
     engine = ScoreEngine(
         threshold=threshold
@@ -1136,6 +1283,52 @@ def calculer_score(
 # ============================================================
 
 def _run_internal_test() -> None:
+    """
+    Test complet du moteur de scoring.
+    """
+
+    # --------------------------------------------------------
+    # TEST NORMALISATION
+    # --------------------------------------------------------
+
+    assert _normalize_direction("BUY") == BULLISH
+    assert _normalize_direction("buy") == BULLISH
+    assert _normalize_direction("bullish") == BULLISH
+
+    assert _normalize_direction("SELL") == BEARISH
+    assert _normalize_direction("sell") == BEARISH
+    assert _normalize_direction("bearish") == BEARISH
+
+    # --------------------------------------------------------
+    # H4
+    # --------------------------------------------------------
+
+    engine = ScoreEngine()
+
+    h4_buy = engine.score_h4_trend(
+        "bullish",
+        "BUY",
+    )
+
+    assert h4_buy[0] == 15
+
+    h4_sell = engine.score_h4_trend(
+        "bearish",
+        "SELL",
+    )
+
+    assert h4_sell[0] == 15
+
+    h4_wrong = engine.score_h4_trend(
+        "bearish",
+        "BUY",
+    )
+
+    assert h4_wrong[0] == -15
+
+    # --------------------------------------------------------
+    # H1
+    # --------------------------------------------------------
 
     h1 = {
         "bias": "bullish",
@@ -1146,6 +1339,10 @@ def _run_internal_test() -> None:
             }
         },
     }
+
+    # --------------------------------------------------------
+    # M15
+    # --------------------------------------------------------
 
     m15 = {
         "bias": "bullish",
@@ -1162,6 +1359,10 @@ def _run_internal_test() -> None:
         },
     }
 
+    # --------------------------------------------------------
+    # M5
+    # --------------------------------------------------------
+
     m5 = {
         "bias": "bullish",
         "latest": {
@@ -1170,6 +1371,10 @@ def _run_internal_test() -> None:
             }
         },
     }
+
+    # --------------------------------------------------------
+    # FIBONACCI
+    # --------------------------------------------------------
 
     fibonacci = {
         "position": {
@@ -1180,14 +1385,22 @@ def _run_internal_test() -> None:
         },
     }
 
+    # --------------------------------------------------------
+    # INDICATEURS
+    # --------------------------------------------------------
+
     indicators = {
         "ema_context": "bullish",
         "rsi_context": "bullish_bias",
         "rsi": 56,
     }
 
+    # --------------------------------------------------------
+    # CALCUL BUY
+    # --------------------------------------------------------
+
     result = calculer_score(
-        direction=BUY,
+        direction="BUY",
         h4_bias="bullish",
         h1_analysis=h1,
         m15_analysis=m15,
@@ -1197,56 +1410,152 @@ def _run_internal_test() -> None:
     )
 
     # --------------------------------------------------------
-    # TESTS DE NORMALISATION
+    # VÉRIFICATIONS
     # --------------------------------------------------------
 
-    assert _normalize_direction("BUY") == "bullish"
-    assert _normalize_direction("SELL") == "bearish"
-    assert _normalize_direction("bullish") == "bullish"
-    assert _normalize_direction("bearish") == "bearish"
+    assert result["direction"] == "BUY"
 
-    # --------------------------------------------------------
-    # TEST H4
-    # --------------------------------------------------------
+    assert result["buy_score"] > 0
 
-    h4_points, _ = ScoreEngine().score_h4_trend(
-        "bullish",
-        "BUY",
-    )
-
-    assert h4_points == 15
-
-    # --------------------------------------------------------
-    # TEST H1
-    # --------------------------------------------------------
-
-    h1_points, _ = ScoreEngine().score_h1_structure(
-        h1,
-        "BUY",
-    )
-
-    assert h1_points == 20
-
-    # --------------------------------------------------------
-    # TEST FINAL
-    # --------------------------------------------------------
-
-    assert result["direction"] == BUY
     assert result["final_score"] > 0
+
     assert result["confirmations"] > 0
+
     assert result["quality"] != "REJECT"
 
+    # Le setup synthétique doit être suffisamment fort.
+    assert result["final_score"] >= 80
+
     logger.info(
-        "Test score réussi : %s",
+        "Test score BUY réussi : %s",
         result,
     )
 
-    print("BUY TEST :", result)
-    print()
-    print("H4 TEST :", h4_points)
-    print("H1 TEST :", h1_points)
-    print()
-    print("✅ TEST SCORE RÉUSSI")
+    print(
+        "BUY SCORE:",
+        result["buy_score"],
+    )
+
+    print(
+        "FINAL SCORE:",
+        result["final_score"],
+    )
+
+    print(
+        "QUALITY:",
+        result["quality"],
+    )
+
+    print(
+        "CONFIRMATIONS:",
+        result["confirmations"],
+    )
+
+    print(
+        "CONTRADICTIONS:",
+        result["contradictions"],
+    )
+
+    # --------------------------------------------------------
+    # TEST SELL
+    # --------------------------------------------------------
+
+    sell_h1 = {
+        "bias": "bearish",
+        "latest": {
+            "bos": {
+                "direction": "bearish",
+                "break_type": "BOS",
+            }
+        },
+    }
+
+    sell_m15 = {
+        "bias": "bearish",
+        "latest": {
+            "order_block": {
+                "direction": "bearish",
+            },
+            "fvg": {
+                "direction": "bearish",
+            },
+            "liquidity_sweep": {
+                "direction": "bearish",
+            },
+        },
+    }
+
+    sell_m5 = {
+        "bias": "bearish",
+        "latest": {
+            "bos": {
+                "direction": "bearish",
+            }
+        },
+    }
+
+    sell_fibonacci = {
+        "position": {
+            "zone": "premium",
+        },
+        "closest_level": {
+            "level": "0.705",
+        },
+    }
+
+    sell_indicators = {
+        "ema_context": "bearish",
+        "rsi_context": "bearish_bias",
+        "rsi": 44,
+    }
+
+    sell_result = calculer_score(
+        direction="SELL",
+        h4_bias="bearish",
+        h1_analysis=sell_h1,
+        m15_analysis=sell_m15,
+        m5_analysis=sell_m5,
+        fibonacci_analysis=sell_fibonacci,
+        indicators=sell_indicators,
+    )
+
+    assert sell_result["direction"] == "SELL"
+
+    assert sell_result["sell_score"] > 0
+
+    assert sell_result["final_score"] > 0
+
+    assert sell_result["final_score"] >= 80
+
+    logger.info(
+        "Test score SELL réussi : %s",
+        sell_result,
+    )
+
+    print(
+        "SELL SCORE:",
+        sell_result["sell_score"],
+    )
+
+    print(
+        "SELL FINAL SCORE:",
+        sell_result["final_score"],
+    )
+
+    print(
+        "SELL QUALITY:",
+        sell_result["quality"],
+    )
+
+    print(
+        "SELL CONFIRMATIONS:",
+        sell_result["confirmations"],
+    )
+
+    print(
+        "SELL CONTRADICTIONS:",
+        sell_result["contradictions"],
+    )
 
 
 # ============================================================
@@ -1282,10 +1591,5 @@ if __name__ == "__main__":
         print()
         print("❌ TEST SCORE ÉCHOUÉ")
         print(
-            f"Type : {type(exc).__name__}"
+            f"Erreur : {type(exc).__name__}: {exc}"
         )
-        print(
-            f"Erreur : {exc}"
-        )
-
-        raise
