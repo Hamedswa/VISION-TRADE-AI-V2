@@ -125,10 +125,52 @@ def _safe_float(
 ) -> float:
     """
     Conversion numérique sécurisée.
+
+    Accepte :
+    - int
+    - float
+    - string numérique
+    - liste
+    - tuple
+
+    Si value est une liste/tuple, la dernière valeur
+    numérique valide est utilisée.
+
+    Cette gestion est nécessaire car indicateurs.py
+    retourne actuellement des séries de valeurs.
     """
 
     if value is None:
         return default
+
+    # --------------------------------------------------------
+    # Liste / tuple
+    # --------------------------------------------------------
+
+    if isinstance(
+        value,
+        (list, tuple),
+    ):
+
+        for item in reversed(value):
+
+            if item is None:
+                continue
+
+            try:
+                return float(item)
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+        return default
+
+    # --------------------------------------------------------
+    # Valeur simple
+    # --------------------------------------------------------
 
     try:
         return float(value)
@@ -181,7 +223,10 @@ def _get_value(
     if obj is None:
         return default
 
-    if isinstance(obj, dict):
+    if isinstance(
+        obj,
+        dict,
+    ):
         return obj.get(
             key,
             default,
@@ -208,7 +253,10 @@ def _get_last_close(
 
     last = candles[-1]
 
-    if not isinstance(last, dict):
+    if not isinstance(
+        last,
+        dict,
+    ):
         raise ValueError(
             "Format de bougie invalide."
         )
@@ -218,7 +266,9 @@ def _get_last_close(
         "Close",
         "CLOSE",
     ):
+
         if key in last:
+
             price = _safe_float(
                 last[key]
             )
@@ -328,6 +378,7 @@ def analyser_timeframe(
         )
 
     if len(candles) < MIN_CANDLES:
+
         logger.warning(
             "%s : seulement %s bougies disponibles "
             "(minimum recommandé : %s).",
@@ -371,16 +422,19 @@ def analyser_timeframe(
     # ========================================================
 
     try:
+
         fvg = detecter_fvg(
             candles
         )
 
     except Exception as exc:
+
         logger.warning(
             "Détection FVG échouée sur %s : %s",
             timeframe,
             exc,
         )
+
         fvg = []
 
     # ========================================================
@@ -410,18 +464,10 @@ def analyser_timeframe(
                 )
             )
 
-        try:
-
-            order_blocks = detecter_order_blocks(
-                candles,
-                structure_breaks,
-            )
-
-        except TypeError:
-
-            order_blocks = detecter_order_blocks(
-                candles
-            )
+        order_blocks = detecter_order_blocks(
+            candles,
+            structure_breaks,
+        )
 
     except Exception as exc:
 
@@ -631,19 +677,21 @@ def determiner_direction(
         SELL
     )
 
-    # --------------------------------------------------------
     # Accord fort
-    # --------------------------------------------------------
 
-    if buy_count >= 2 and buy_count > sell_count:
+    if (
+        buy_count >= 2
+        and buy_count > sell_count
+    ):
         return BUY
 
-    if sell_count >= 2 and sell_count > buy_count:
+    if (
+        sell_count >= 2
+        and sell_count > buy_count
+    ):
         return SELL
 
-    # --------------------------------------------------------
     # Priorité H4 + H1
-    # --------------------------------------------------------
 
     if (
         h4_bias == BUY
@@ -701,10 +749,6 @@ def verifier_confirmation_m5(
     if m5_bias == direction:
         confirmation = True
 
-    # --------------------------------------------------------
-    # Vérification supplémentaire avec le dernier BOS/CHoCH
-    # --------------------------------------------------------
-
     if isinstance(
         latest,
         dict,
@@ -740,8 +784,11 @@ def verifier_confirmation_m5(
 
     return {
         "direction": direction,
+
         "m5_bias": m5_bias,
+
         "confirmed": confirmation,
+
         "structure_available": bool(
             structure
         ),
@@ -758,6 +805,10 @@ def construire_contexte_indicateurs(
 ) -> Dict[str, Any]:
     """
     Construit le contexte utilisé par score.py.
+
+    Les indicateurs peuvent être retournés sous forme
+    de séries. _safe_float() récupère alors la dernière
+    valeur disponible.
     """
 
     ema20 = _safe_float(
@@ -833,6 +884,7 @@ def construire_contexte_indicateurs(
 
     return {
         "ema20": ema20,
+
         "ema50": ema50,
 
         "rsi": rsi,
@@ -917,20 +969,13 @@ def _extract_swing_prices(
     analysis: Dict[str, Any],
 ) -> Dict[str, list]:
     """
-    Extrait correctement les swings depuis
-    le résultat de structure.py.
+    Extrait les swings depuis structure.py.
 
     structure.py retourne :
 
         swings:
             highs: [...]
             lows: [...]
-
-    et non directement :
-
-        latest:
-            swing_high
-            swing_low
     """
 
     result = {
@@ -1022,18 +1067,7 @@ def determiner_stop_loss(
 
         1. Swing M15
         2. Swing H1
-        3. Structure récente M15/H1
-        4. ATR de sécurité
-
-    BUY :
-
-        SL sous le dernier swing low.
-
-    SELL :
-
-        SL au-dessus du dernier swing high.
-
-    Le SL doit toujours être cohérent avec l'entrée.
+        3. ATR de sécurité
     """
 
     direction = _normalize_direction(
@@ -1051,10 +1085,6 @@ def determiner_stop_loss(
     if entry <= 0:
         return None
 
-    # --------------------------------------------------------
-    # Extraction correcte des swings
-    # --------------------------------------------------------
-
     m15_swings = _extract_swing_prices(
         m15_analysis
     )
@@ -1063,22 +1093,20 @@ def determiner_stop_loss(
         h1_analysis
     )
 
-    # --------------------------------------------------------
-    # Candidats
-    # --------------------------------------------------------
+    # ========================================================
+    # BUY
+    # ========================================================
 
     if direction == BUY:
 
         candidates = []
 
-        # M15 en priorité
         candidates.extend(
             value
             for value in m15_swings["lows"]
             if value < entry
         )
 
-        # H1 ensuite
         candidates.extend(
             value
             for value in h1_swings["lows"]
@@ -1087,14 +1115,9 @@ def determiner_stop_loss(
 
         if candidates:
 
-            # Le niveau le plus proche sous l'entrée.
             return max(
                 candidates
             )
-
-        # ----------------------------------------------------
-        # Fallback ATR
-        # ----------------------------------------------------
 
         if atr > 0:
 
@@ -1105,18 +1128,20 @@ def determiner_stop_loss(
             if stop > 0:
                 return stop
 
+    # ========================================================
+    # SELL
+    # ========================================================
+
     elif direction == SELL:
 
         candidates = []
 
-        # M15 en priorité
         candidates.extend(
             value
             for value in m15_swings["highs"]
             if value > entry
         )
 
-        # H1 ensuite
         candidates.extend(
             value
             for value in h1_swings["highs"]
@@ -1125,14 +1150,9 @@ def determiner_stop_loss(
 
         if candidates:
 
-            # Le niveau le plus proche au-dessus de l'entrée.
             return min(
                 candidates
             )
-
-        # ----------------------------------------------------
-        # Fallback ATR
-        # ----------------------------------------------------
 
         if atr > 0:
 
@@ -1600,15 +1620,21 @@ def analyser_marche(
             "risk": rr_result.risk,
 
             "tp1": rr_result.tp1,
+
             "tp2": rr_result.tp2,
+
             "tp3": rr_result.tp3,
 
             "reward_tp1": rr_result.reward_tp1,
+
             "reward_tp2": rr_result.reward_tp2,
+
             "reward_tp3": rr_result.reward_tp3,
 
             "rr_tp1": rr_result.rr_tp1,
+
             "rr_tp2": rr_result.rr_tp2,
+
             "rr_tp3": rr_result.rr_tp3,
 
             "minimum_rr": rr_result.minimum_rr,
@@ -1800,6 +1826,7 @@ def _run_internal_test() -> None:
     """
 
     # Direction
+
     assert _normalize_direction(
         "buy"
     ) == BUY
@@ -1812,22 +1839,75 @@ def _run_internal_test() -> None:
         "xxx"
     ) == NEUTRAL
 
-    # Float
+    # Float simple
+
     assert _safe_float(
         "100.5"
     ) == 100.5
 
+    # Float liste
+
+    assert _safe_float(
+        [100.0, 101.0, 102.5]
+    ) == 102.5
+
+    # Float tuple
+
+    assert _safe_float(
+        (10.0, 20.0)
+    ) == 20.0
+
     # Indicateurs
+
     indicators = (
         construire_contexte_indicateurs(
             {
-                "ema20": 2000,
-                "ema50": 1990,
-                "rsi": 55,
-                "atr": 10,
+                "ema20": [
+                    1990,
+                    1995,
+                    2000,
+                ],
+
+                "ema50": [
+                    1980,
+                    1985,
+                    1990,
+                ],
+
+                "rsi": [
+                    48,
+                    51,
+                    55,
+                ],
+
+                "atr": [
+                    8,
+                    9,
+                    10,
+                ],
             },
             BUY,
         )
+    )
+
+    assert (
+        indicators["ema20"]
+        == 2000
+    )
+
+    assert (
+        indicators["ema50"]
+        == 1990
+    )
+
+    assert (
+        indicators["rsi"]
+        == 55
+    )
+
+    assert (
+        indicators["atr"]
+        == 10
     )
 
     assert (
@@ -1841,6 +1921,7 @@ def _run_internal_test() -> None:
     )
 
     # Extraction swings
+
     fake_analysis = {
         "swings": {
             "highs": [
@@ -1849,6 +1930,7 @@ def _run_internal_test() -> None:
                     "price": 2050,
                 },
             ],
+
             "lows": [
                 {
                     "index": 12,
@@ -1871,6 +1953,7 @@ def _run_internal_test() -> None:
     ]
 
     # SL BUY
+
     buy_sl = determiner_stop_loss(
         direction=BUY,
 
@@ -1886,6 +1969,7 @@ def _run_internal_test() -> None:
     assert buy_sl == 1980
 
     # SL SELL
+
     sell_sl = determiner_stop_loss(
         direction=SELL,
 
@@ -1901,6 +1985,7 @@ def _run_internal_test() -> None:
     assert sell_sl == 2050
 
     # Validation SL
+
     assert _validate_stop_loss(
         BUY,
         2000,
