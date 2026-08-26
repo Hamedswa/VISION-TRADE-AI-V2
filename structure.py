@@ -39,9 +39,12 @@ DEFAULT_SWING_LOOKBACK = 2
 DEFAULT_FVG_MIN_SIZE = 0.0
 DEFAULT_OB_LOOKBACK = 10
 
-# Tolérance utilisée pour regrouper les niveaux
-# de liquidité proches sur XAU/USD.
 DEFAULT_LIQUIDITY_TOLERANCE = 0.05
+
+# Nombre de décimales utilisées pour les sorties.
+# Les calculs internes restent en float complet.
+PRICE_DECIMALS = 2
+SIZE_DECIMALS = 4
 
 BULLISH = "bullish"
 BEARISH = "bearish"
@@ -94,7 +97,43 @@ def _price(
 ) -> float:
     """Convertit un prix en float."""
 
-    return float(candle[key])
+    try:
+        return float(candle[key])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Prix invalide pour '{key}': "
+            f"{candle.get(key)!r}"
+        ) from exc
+
+
+def _round_price(
+    value: Any,
+    decimals: int = PRICE_DECIMALS,
+) -> Any:
+    """Arrondit proprement un prix."""
+
+    if value is None:
+        return None
+
+    try:
+        return round(float(value), decimals)
+    except (TypeError, ValueError):
+        return value
+
+
+def _round_size(
+    value: Any,
+    decimals: int = SIZE_DECIMALS,
+) -> Any:
+    """Arrondit une taille/distance."""
+
+    if value is None:
+        return None
+
+    try:
+        return round(float(value), decimals)
+    except (TypeError, ValueError):
+        return value
 
 
 # ============================================================
@@ -103,8 +142,6 @@ def _price(
 
 @dataclass
 class SwingPoint:
-    """Point de structure."""
-
     index: int
     price: float
     type: str
@@ -113,8 +150,6 @@ class SwingPoint:
 
 @dataclass
 class StructureBreak:
-    """BOS ou CHoCH."""
-
     index: int
     price: float
     direction: str
@@ -124,8 +159,6 @@ class StructureBreak:
 
 @dataclass
 class FairValueGap:
-    """Fair Value Gap."""
-
     index: int
     direction: str
     top: float
@@ -135,8 +168,6 @@ class FairValueGap:
 
 @dataclass
 class OrderBlock:
-    """Order Block."""
-
     index: int
     direction: str
     high: float
@@ -147,8 +178,6 @@ class OrderBlock:
 
 @dataclass
 class LiquidityLevel:
-    """Niveau de liquidité."""
-
     price: float
     direction: str
     source_indices: List[int]
@@ -157,8 +186,6 @@ class LiquidityLevel:
 
 @dataclass
 class LiquiditySweep:
-    """Sweep d'un niveau de liquidité."""
-
     index: int
     direction: str
     liquidity_price: float
@@ -174,12 +201,6 @@ def detecter_swing_highs(
     candles: Sequence[dict],
     lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> List[SwingPoint]:
-    """
-    Détecte les Swing High.
-
-    Un sommet est considéré comme Swing High si son high
-    est supérieur ou égal aux highs des bougies voisines.
-    """
 
     _validate_candles(candles)
 
@@ -201,10 +222,7 @@ def detecter_swing_highs(
         )
 
         left = [
-            _price(
-                candles[j],
-                "high",
-            )
+            _price(candles[j], "high")
             for j in range(
                 i - lookback,
                 i,
@@ -212,10 +230,7 @@ def detecter_swing_highs(
         ]
 
         right = [
-            _price(
-                candles[j],
-                "high",
-            )
+            _price(candles[j], "high")
             for j in range(
                 i + 1,
                 i + lookback + 1,
@@ -252,9 +267,6 @@ def detecter_swing_lows(
     candles: Sequence[dict],
     lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> List[SwingPoint]:
-    """
-    Détecte les Swing Low.
-    """
 
     _validate_candles(candles)
 
@@ -276,10 +288,7 @@ def detecter_swing_lows(
         )
 
         left = [
-            _price(
-                candles[j],
-                "low",
-            )
+            _price(candles[j], "low")
             for j in range(
                 i - lookback,
                 i,
@@ -287,10 +296,7 @@ def detecter_swing_lows(
         ]
 
         right = [
-            _price(
-                candles[j],
-                "low",
-            )
+            _price(candles[j], "low")
             for j in range(
                 i + 1,
                 i + lookback + 1,
@@ -327,9 +333,6 @@ def detecter_swings(
     candles: Sequence[dict],
     lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> Dict[str, List[SwingPoint]]:
-    """
-    Retourne les Swing High et Swing Low.
-    """
 
     return {
         "highs": detecter_swing_highs(
@@ -351,14 +354,6 @@ def classifier_swings(
     swing_highs: Sequence[SwingPoint],
     swing_lows: Sequence[SwingPoint],
 ) -> List[Dict[str, Any]]:
-    """
-    Classe les swings en :
-
-    HH = Higher High
-    HL = Higher Low
-    LH = Lower High
-    LL = Lower Low
-    """
 
     points: List[SwingPoint] = []
 
@@ -405,7 +400,7 @@ def classifier_swings(
         result.append(
             {
                 "index": swing.index,
-                "price": swing.price,
+                "price": _round_price(swing.price),
                 "type": swing.type,
                 "label": label,
                 "strength": swing.strength,
@@ -424,15 +419,6 @@ def detecter_bos(
     swing_highs: Sequence[SwingPoint],
     swing_lows: Sequence[SwingPoint],
 ) -> List[StructureBreak]:
-    """
-    Détecte les Break Of Structure.
-
-    BOS bullish :
-        clôture au-dessus d'un Swing High.
-
-    BOS bearish :
-        clôture sous un Swing Low.
-    """
 
     _validate_candles(candles)
 
@@ -448,10 +434,7 @@ def detecter_bos(
             "close",
         )
 
-        # ----------------------------------------------------
         # BOS BULLISH
-        # ----------------------------------------------------
-
         for swing in swing_highs:
 
             if swing.index >= i:
@@ -476,10 +459,7 @@ def detecter_bos(
                     swing.index
                 )
 
-        # ----------------------------------------------------
         # BOS BEARISH
-        # ----------------------------------------------------
-
         for swing in swing_lows:
 
             if swing.index >= i:
@@ -520,15 +500,6 @@ def detecter_choch(
     swing_highs: Sequence[SwingPoint],
     swing_lows: Sequence[SwingPoint],
 ) -> List[StructureBreak]:
-    """
-    Détecte les changements de caractère.
-
-    Haussier + cassure du dernier low :
-        CHoCH bearish.
-
-    Baissier + cassure du dernier high :
-        CHoCH bullish.
-    """
 
     _validate_candles(candles)
 
@@ -575,10 +546,7 @@ def detecter_choch(
             "close",
         )
 
-        # ----------------------------------------------------
         # CHoCH BEARISH
-        # ----------------------------------------------------
-
         if (
             structure_bias == BULLISH
             and last_low is not None
@@ -597,10 +565,7 @@ def detecter_choch(
 
             structure_bias = BEARISH
 
-        # ----------------------------------------------------
         # CHoCH BULLISH
-        # ----------------------------------------------------
-
         elif (
             structure_bias == BEARISH
             and last_high is not None
@@ -619,10 +584,7 @@ def detecter_choch(
 
             structure_bias = BULLISH
 
-        # ----------------------------------------------------
         # PREMIER BIAIS
-        # ----------------------------------------------------
-
         elif (
             structure_bias == NEUTRAL
             and last_high is not None
@@ -652,12 +614,12 @@ def detecter_order_blocks(
     lookback: int = DEFAULT_OB_LOOKBACK,
 ) -> List[OrderBlock]:
     """
-    Détecte les Order Blocks associés aux cassures.
+    Détecte les Order Blocks associés aux BOS/CHoCH.
 
-    BOS/CHoCH bullish :
+    Bullish :
         dernière bougie bearish avant la cassure.
 
-    BOS/CHoCH bearish :
+    Bearish :
         dernière bougie bullish avant la cassure.
     """
 
@@ -668,30 +630,59 @@ def detecter_order_blocks(
             "lookback doit être >= 1."
         )
 
+    if structure_breaks is None:
+        structure_breaks = []
+
     order_blocks: List[OrderBlock] = []
 
     for event in structure_breaks:
 
-        if event.break_type not in {
+        if isinstance(event, dict):
+
+            break_type = event.get(
+                "break_type"
+            )
+
+            direction = event.get(
+                "direction"
+            )
+
+            event_index = event.get(
+                "index"
+            )
+
+        else:
+
+            break_type = event.break_type
+            direction = event.direction
+            event_index = event.index
+
+        if break_type not in {
             "BOS",
             "CHoCH",
         }:
             continue
 
+        if event_index is None:
+            continue
+
+        event_index = int(event_index)
+
+        if event_index <= 0:
+            continue
+
         start = max(
             0,
-            event.index - lookback,
-        )
-
-        candidate_indices = range(
-            event.index - 1,
-            start - 1,
-            -1,
+            event_index - lookback,
         )
 
         selected = None
 
-        for index in candidate_indices:
+        for index in range(
+            event_index - 1,
+            start - 1,
+            -1,
+        ):
 
             candle = candles[index]
 
@@ -705,13 +696,13 @@ def detecter_order_blocks(
                 "close",
             )
 
-            if event.direction == BULLISH:
+            if direction == BULLISH:
 
                 if close_price < open_price:
                     selected = index
                     break
 
-            elif event.direction == BEARISH:
+            elif direction == BEARISH:
 
                 if close_price > open_price:
                     selected = index
@@ -745,7 +736,7 @@ def detecter_order_blocks(
         order_blocks.append(
             OrderBlock(
                 index=selected,
-                direction=event.direction,
+                direction=direction,
                 high=high,
                 low=low,
                 body_high=body_high,
@@ -761,7 +752,6 @@ def detecter_order_blocks(
 def _deduplicate_order_blocks(
     order_blocks: Sequence[OrderBlock],
 ) -> List[OrderBlock]:
-    """Supprime les Order Blocks identiques."""
 
     seen = set()
     result: List[OrderBlock] = []
@@ -790,15 +780,6 @@ def detecter_fvg(
     candles: Sequence[dict],
     min_size: float = DEFAULT_FVG_MIN_SIZE,
 ) -> List[FairValueGap]:
-    """
-    Détecte les FVG avec une structure de trois bougies.
-
-    Bullish FVG :
-        low[i] > high[i-2]
-
-    Bearish FVG :
-        high[i] < low[i-2]
-    """
 
     _validate_candles(candles)
 
@@ -837,10 +818,7 @@ def detecter_fvg(
             "low",
         )
 
-        # ----------------------------------------------------
         # BULLISH FVG
-        # ----------------------------------------------------
-
         if low_3 > high_1:
 
             size = low_3 - high_1
@@ -857,10 +835,7 @@ def detecter_fvg(
                     )
                 )
 
-        # ----------------------------------------------------
         # BEARISH FVG
-        # ----------------------------------------------------
-
         elif high_3 < low_1:
 
             size = low_1 - high_3
@@ -888,15 +863,6 @@ def _group_nearby_levels(
     points: Sequence[SwingPoint],
     tolerance: float,
 ) -> List[LiquidityLevel]:
-    """
-    Regroupe les swings proches afin de détecter
-    les zones potentielles de liquidité.
-
-    Les points sont regroupés uniquement lorsqu'ils
-    appartiennent au même type :
-        highs  -> buy-side
-        lows   -> sell-side
-    """
 
     if not points:
         return []
@@ -951,16 +917,11 @@ def _group_nearby_levels(
 
     for group in groups:
 
-        # Il faut au minimum deux swings
-        # pour considérer une zone comme
-        # liquidité significative.
         if len(group) < 2:
             continue
 
         point_type = group[0].type
 
-        # Sécurité : un groupe ne doit pas
-        # mélanger highs et lows.
         if any(
             point.type != point_type
             for point in group
@@ -1001,16 +962,6 @@ def detecter_liquidite(
     swing_lows: Sequence[SwingPoint],
     tolerance: float = DEFAULT_LIQUIDITY_TOLERANCE,
 ) -> List[LiquidityLevel]:
-    """
-    Détecte les zones où plusieurs swings
-    se concentrent.
-
-    Highs :
-        buy-side liquidity.
-
-    Lows :
-        sell-side liquidity.
-    """
 
     if tolerance < 0:
         raise ValueError(
@@ -1038,50 +989,12 @@ def detecter_liquidity_sweeps(
     candles: Sequence[dict],
     liquidity_levels: Sequence[LiquidityLevel],
 ) -> List[LiquiditySweep]:
-    """
-    Détecte les vrais sweeps de liquidité.
-
-    IMPORTANT :
-    ----------------------------------------------------------
-    Un niveau ne peut être utilisé que lorsqu'il est déjà
-    connu du marché.
-
-    Donc :
-        max(source_indices) < index de la bougie
-
-    est obligatoire.
-
-    Ensuite, lorsqu'un niveau est sweepé, il est considéré
-    comme consommé et ne peut plus générer un deuxième sweep
-    dans la même analyse.
-
-    Buy-side sweep :
-        high > niveau
-        ET close < niveau
-
-    Sell-side sweep :
-        low < niveau
-        ET close > niveau
-    """
 
     _validate_candles(candles)
 
     sweeps: List[LiquiditySweep] = []
 
-    # --------------------------------------------------------
-    # Niveaux déjà consommés.
-    #
-    # On utilise l'identité du niveau :
-    # direction + source_indices.
-    # --------------------------------------------------------
-
     consumed_levels = set()
-
-    # --------------------------------------------------------
-    # Parcours chronologique.
-    #
-    # Très important pour éviter le look-ahead bias.
-    # --------------------------------------------------------
 
     for i, candle in enumerate(candles):
 
@@ -1113,33 +1026,17 @@ def detecter_liquidity_sweeps(
                 source_indices,
             )
 
-            # ------------------------------------------------
-            # Le niveau a déjà été sweepé.
-            # ------------------------------------------------
-
             if level_key in consumed_levels:
                 continue
-
-            # ------------------------------------------------
-            # Le niveau n'est pas encore connu.
-            #
-            # On interdit donc l'utilisation d'un niveau
-            # provenant du futur.
-            # ------------------------------------------------
 
             if not source_indices:
                 continue
 
+            # Protection contre le look-ahead bias.
             if max(source_indices) >= i:
                 continue
 
-            # ------------------------------------------------
-            # BUY-SIDE LIQUIDITY
-            #
-            # Sweep bearish :
-            # le prix prend les highs puis clôture dessous.
-            # ------------------------------------------------
-
+            # BUY-SIDE SWEEP
             if level.direction == BUY_SIDE:
 
                 if (
@@ -1157,18 +1054,11 @@ def detecter_liquidity_sweeps(
                         )
                     )
 
-                    # Niveau consommé.
                     consumed_levels.add(
                         level_key
                     )
 
-            # ------------------------------------------------
-            # SELL-SIDE LIQUIDITY
-            #
-            # Sweep bullish :
-            # le prix prend les lows puis clôture dessus.
-            # ------------------------------------------------
-
+            # SELL-SIDE SWEEP
             elif level.direction == SELL_SIDE:
 
                 if (
@@ -1186,7 +1076,6 @@ def detecter_liquidity_sweeps(
                         )
                     )
 
-                    # Niveau consommé.
                     consumed_levels.add(
                         level_key
                     )
@@ -1199,16 +1088,6 @@ def detecter_liquidity_sweeps(
 def _deduplicate_liquidity_sweeps(
     sweeps: Sequence[LiquiditySweep],
 ) -> List[LiquiditySweep]:
-    """
-    Sécurité supplémentaire contre les doublons.
-
-    Deux sweeps identiques sur :
-        - même index
-        - même direction
-        - même niveau
-
-    ne sont conservés qu'une seule fois.
-    """
 
     seen = set()
     result: List[LiquiditySweep] = []
@@ -1240,10 +1119,6 @@ def _deduplicate_liquidity_sweeps(
 def determiner_biais_structure(
     swings: Sequence[Dict[str, Any]],
 ) -> str:
-    """
-    Détermine un biais structurel simple à partir
-    des derniers HH/HL/LH/LL.
-    """
 
     if not swings:
         return NEUTRAL
@@ -1253,7 +1128,7 @@ def determiner_biais_structure(
     bullish_points = sum(
         1
         for swing in recent
-        if swing["label"] in {
+        if swing.get("label") in {
             "HH",
             "HL",
         }
@@ -1262,7 +1137,7 @@ def determiner_biais_structure(
     bearish_points = sum(
         1
         for swing in recent
-        if swing["label"] in {
+        if swing.get("label") in {
             "LH",
             "LL",
         }
@@ -1275,6 +1150,248 @@ def determiner_biais_structure(
         return BEARISH
 
     return NEUTRAL
+
+
+# ============================================================
+# CONVERSION DES RÉSULTATS
+# ============================================================
+
+def _serialize_structure(
+    analysis: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Convertit les dataclasses en dictionnaires
+    et arrondit les prix pour les sorties.
+
+    Les calculs internes ne sont PAS arrondis.
+    """
+
+    swings = analysis["swings"]
+
+    return {
+        "swings": {
+            "highs": [
+                {
+                    **asdict(point),
+                    "price": _round_price(
+                        point.price
+                    ),
+                }
+                for point in swings["highs"]
+            ],
+
+            "lows": [
+                {
+                    **asdict(point),
+                    "price": _round_price(
+                        point.price
+                    ),
+                }
+                for point in swings["lows"]
+            ],
+
+            "classified": swings[
+                "classified"
+            ],
+        },
+
+        "bos": [
+            {
+                **asdict(event),
+                "price": _round_price(
+                    event.price
+                ),
+            }
+            for event in analysis["bos"]
+        ],
+
+        "choch": [
+            {
+                **asdict(event),
+                "price": _round_price(
+                    event.price
+                ),
+            }
+            for event in analysis["choch"]
+        ],
+
+        "order_blocks": [
+            {
+                **asdict(ob),
+                "high": _round_price(ob.high),
+                "low": _round_price(ob.low),
+                "body_high": _round_price(
+                    ob.body_high
+                ),
+                "body_low": _round_price(
+                    ob.body_low
+                ),
+            }
+            for ob in analysis[
+                "order_blocks"
+            ]
+        ],
+
+        "fvg": [
+            {
+                **asdict(fvg),
+                "top": _round_price(fvg.top),
+                "bottom": _round_price(
+                    fvg.bottom
+                ),
+                "size": _round_size(
+                    fvg.size
+                ),
+            }
+            for fvg in analysis["fvg"]
+        ],
+
+        "liquidity": [
+            {
+                **asdict(level),
+                "price": _round_price(
+                    level.price
+                ),
+            }
+            for level in analysis[
+                "liquidity"
+            ]
+        ],
+
+        "liquidity_sweeps": [
+            {
+                **asdict(sweep),
+                "liquidity_price": _round_price(
+                    sweep.liquidity_price
+                ),
+                "candle_high": _round_price(
+                    sweep.candle_high
+                ),
+                "candle_low": _round_price(
+                    sweep.candle_low
+                ),
+            }
+            for sweep in analysis[
+                "liquidity_sweeps"
+            ]
+        ],
+
+        "bias": analysis["bias"],
+
+        "latest": {
+            "bos": (
+                {
+                    **asdict(
+                        analysis["bos"][-1]
+                    ),
+                    "price": _round_price(
+                        analysis["bos"][-1].price
+                    ),
+                }
+                if analysis["bos"]
+                else None
+            ),
+
+            "choch": (
+                {
+                    **asdict(
+                        analysis["choch"][-1]
+                    ),
+                    "price": _round_price(
+                        analysis["choch"][-1].price
+                    ),
+                }
+                if analysis["choch"]
+                else None
+            ),
+
+            "order_block": (
+                {
+                    **asdict(
+                        analysis[
+                            "order_blocks"
+                        ][-1]
+                    ),
+                    "high": _round_price(
+                        analysis[
+                            "order_blocks"
+                        ][-1].high
+                    ),
+                    "low": _round_price(
+                        analysis[
+                            "order_blocks"
+                        ][-1].low
+                    ),
+                    "body_high": _round_price(
+                        analysis[
+                            "order_blocks"
+                        ][-1].body_high
+                    ),
+                    "body_low": _round_price(
+                        analysis[
+                            "order_blocks"
+                        ][-1].body_low
+                    ),
+                }
+                if analysis["order_blocks"]
+                else None
+            ),
+
+            "fvg": (
+                {
+                    **asdict(
+                        analysis["fvg"][-1]
+                    ),
+                    "top": _round_price(
+                        analysis["fvg"][-1].top
+                    ),
+                    "bottom": _round_price(
+                        analysis["fvg"][-1].bottom
+                    ),
+                    "size": _round_size(
+                        analysis["fvg"][-1].size
+                    ),
+                }
+                if analysis["fvg"]
+                else None
+            ),
+
+            "liquidity_sweep": (
+                {
+                    **asdict(
+                        analysis[
+                            "liquidity_sweeps"
+                        ][-1]
+                    ),
+                    "liquidity_price":
+                        _round_price(
+                            analysis[
+                                "liquidity_sweeps"
+                            ][-1]
+                            .liquidity_price
+                        ),
+                    "candle_high":
+                        _round_price(
+                            analysis[
+                                "liquidity_sweeps"
+                            ][-1]
+                            .candle_high
+                        ),
+                    "candle_low":
+                        _round_price(
+                            analysis[
+                                "liquidity_sweeps"
+                            ][-1]
+                            .candle_low
+                        ),
+                }
+                if analysis[
+                    "liquidity_sweeps"
+                ]
+                else None
+            ),
+        },
+    }
 
 
 # ============================================================
@@ -1294,10 +1411,7 @@ def analyser_structure(
 
     _validate_candles(candles)
 
-    # --------------------------------------------------------
     # SWINGS
-    # --------------------------------------------------------
-
     swings = detecter_swings(
         candles,
         lookback=swing_lookback,
@@ -1306,39 +1420,27 @@ def analyser_structure(
     swing_highs = swings["highs"]
     swing_lows = swings["lows"]
 
-    # --------------------------------------------------------
     # CLASSIFICATION
-    # --------------------------------------------------------
-
     classified_swings = classifier_swings(
         swing_highs,
         swing_lows,
     )
 
-    # --------------------------------------------------------
     # BOS
-    # --------------------------------------------------------
-
     bos = detecter_bos(
         candles,
         swing_highs,
         swing_lows,
     )
 
-    # --------------------------------------------------------
     # CHoCH
-    # --------------------------------------------------------
-
     choch = detecter_choch(
         candles,
         swing_highs,
         swing_lows,
     )
 
-    # --------------------------------------------------------
     # STRUCTURE BREAKS
-    # --------------------------------------------------------
-
     structure_breaks = (
         bos + choch
     )
@@ -1347,133 +1449,64 @@ def analyser_structure(
         key=lambda event: event.index
     )
 
-    # --------------------------------------------------------
     # ORDER BLOCKS
-    # --------------------------------------------------------
-
     order_blocks = detecter_order_blocks(
         candles,
         structure_breaks,
         lookback=ob_lookback,
     )
 
-    # --------------------------------------------------------
     # FVG
-    # --------------------------------------------------------
-
     fvgs = detecter_fvg(
         candles,
         min_size=fvg_min_size,
     )
 
-    # --------------------------------------------------------
     # LIQUIDITÉ
-    # --------------------------------------------------------
-
     liquidity = detecter_liquidite(
         swing_highs,
         swing_lows,
         tolerance=liquidity_tolerance,
     )
 
-    # --------------------------------------------------------
     # LIQUIDITY SWEEPS
-    # --------------------------------------------------------
-
     sweeps = detecter_liquidity_sweeps(
         candles,
         liquidity,
     )
 
-    # --------------------------------------------------------
     # BIAIS
-    # --------------------------------------------------------
-
     bias = determiner_biais_structure(
         classified_swings
     )
 
-    # --------------------------------------------------------
-    # RÉSULTAT
-    # --------------------------------------------------------
-
-    return {
+    # ANALYSE INTERNE
+    raw_analysis = {
         "swings": {
-            "highs": [
-                asdict(point)
-                for point in swing_highs
-            ],
-            "lows": [
-                asdict(point)
-                for point in swing_lows
-            ],
+            "highs": swing_highs,
+            "lows": swing_lows,
             "classified": classified_swings,
         },
 
-        "bos": [
-            asdict(event)
-            for event in bos
-        ],
+        "bos": bos,
 
-        "choch": [
-            asdict(event)
-            for event in choch
-        ],
+        "choch": choch,
 
-        "order_blocks": [
-            asdict(ob)
-            for ob in order_blocks
-        ],
+        "order_blocks": order_blocks,
 
-        "fvg": [
-            asdict(fvg)
-            for fvg in fvgs
-        ],
+        "fvg": fvgs,
 
-        "liquidity": [
-            asdict(level)
-            for level in liquidity
-        ],
+        "liquidity": liquidity,
 
-        "liquidity_sweeps": [
-            asdict(sweep)
-            for sweep in sweeps
-        ],
+        "liquidity_sweeps": sweeps,
 
         "bias": bias,
-
-        "latest": {
-            "bos": (
-                asdict(bos[-1])
-                if bos
-                else None
-            ),
-
-            "choch": (
-                asdict(choch[-1])
-                if choch
-                else None
-            ),
-
-            "order_block": (
-                asdict(order_blocks[-1])
-                if order_blocks
-                else None
-            ),
-
-            "fvg": (
-                asdict(fvgs[-1])
-                if fvgs
-                else None
-            ),
-
-            "liquidity_sweep": (
-                asdict(sweeps[-1])
-                if sweeps
-                else None
-            ),
-        },
     }
+
+    # SORTIE PROPRE
+    return _serialize_structure(
+        raw_analysis
+    )
 
 
 # ============================================================
@@ -1485,18 +1518,7 @@ def analyser_structure_multi_tf(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Analyse la structure de plusieurs timeframes.
-
-    Exemple :
-
-        {
-            "H4": candles_h4,
-            "H1": candles_h1,
-            "M15": candles_m15,
-            "M5": candles_m5
-        }
-
-    Chaque timeframe est analysé indépendamment.
+    Analyse H4 / H1 / M15 / M5.
     """
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -1531,10 +1553,11 @@ def analyser_structure_multi_tf(
 def resume_structure(
     analysis: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Retourne uniquement les éléments essentiels
-    destinés aux modules supérieurs.
-    """
+
+    swings = analysis.get(
+        "swings",
+        {},
+    )
 
     return {
         "bias": analysis.get(
@@ -1543,20 +1566,14 @@ def resume_structure(
         ),
 
         "swing_highs": len(
-            analysis.get(
-                "swings",
-                {},
-            ).get(
+            swings.get(
                 "highs",
                 [],
             )
         ),
 
         "swing_lows": len(
-            analysis.get(
-                "swings",
-                {},
-            ).get(
+            swings.get(
                 "lows",
                 [],
             )
@@ -1618,10 +1635,6 @@ def resume_structure(
 def _generate_test_candles(
     count: int = 80,
 ) -> List[dict]:
-    """
-    Génère des bougies synthétiques uniquement
-    pour tester le moteur structurel.
-    """
 
     candles: List[dict] = []
 
@@ -1681,9 +1694,6 @@ def _generate_test_candles(
 
 
 def _run_internal_test() -> None:
-    """
-    Test principal du moteur structurel.
-    """
 
     candles = _generate_test_candles()
 
