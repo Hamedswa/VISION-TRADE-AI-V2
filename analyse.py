@@ -519,12 +519,16 @@ def determiner_direction(
     Règles :
 
     1. H4 est l'ancrage principal.
-    2. H1 et M15 peuvent être NEUTRAL sans annuler H4.
-    3. H1/M15 opposés à H4 peuvent bloquer la direction
-       lorsqu'ils sont tous les deux opposés.
-    4. Si H4 et H1 sont alignés, la direction est validée.
-    5. Si H4 est NEUTRAL, H1 + M15 doivent être alignés.
-    6. M5 n'intervient jamais ici.
+    2. H1 et M15 peuvent être NEUTRAL.
+    3. Si H4 est BUY/SELL et H1 + M15 sont NEUTRAL,
+       H4 détermine la direction.
+    4. Si H4 et H1 sont alignés, H4 est validé.
+    5. Si H4 et M15 sont alignés, H4 est validé.
+    6. Si H1 et M15 sont tous les deux opposés à H4,
+       la direction devient NEUTRAL.
+    7. Si H4 est NEUTRAL, H1 + M15 doivent être
+       alignés pour créer une direction.
+    8. M5 n'intervient jamais ici.
     """
 
     h4_bias = _normalize_direction(
@@ -540,57 +544,87 @@ def determiner_direction(
     )
 
     # ========================================================
-    # H4 + H1 ALIGNÉS
+    # CAS 1 — H4 NEUTRAL
     # ========================================================
 
-    if h4_bias != NEUTRAL and h4_bias == h1_bias:
+    if h4_bias == NEUTRAL:
+
+        if (
+            h1_bias != NEUTRAL
+            and h1_bias == m15_bias
+        ):
+            return h1_bias
+
+        return NEUTRAL
+
+    # ========================================================
+    # CAS 2 — H4 + H1 ALIGNÉS
+    # ========================================================
+
+    if h1_bias == h4_bias:
+
         return h4_bias
 
     # ========================================================
-    # H4 + M15 ALIGNÉS
+    # CAS 3 — H4 + M15 ALIGNÉS
     # ========================================================
 
-    if h4_bias != NEUTRAL and h4_bias == m15_bias:
+    if m15_bias == h4_bias:
+
         return h4_bias
 
     # ========================================================
-    # H4 SEUL MAIS H1/M15 NEUTRES
+    # CAS 4 — H4 SEUL
+    # H1 + M15 sont NEUTRAL
     # ========================================================
 
     if (
-        h4_bias != NEUTRAL
-        and h1_bias == NEUTRAL
+        h1_bias == NEUTRAL
         and m15_bias == NEUTRAL
     ):
+
         return h4_bias
 
     # ========================================================
-    # H4 CONTREDIT PAR H1 + M15
+    # CAS 5 — H1 NEUTRAL
+    # M15 contredit H4
     # ========================================================
 
     if (
-        h4_bias != NEUTRAL
-        and h1_bias != NEUTRAL
+        h1_bias == NEUTRAL
+        and m15_bias != h4_bias
+    ):
+
+        return NEUTRAL
+
+    # ========================================================
+    # CAS 6 — M15 NEUTRAL
+    # H1 contredit H4
+    # ========================================================
+
+    if (
+        m15_bias == NEUTRAL
+        and h1_bias != h4_bias
+    ):
+
+        return NEUTRAL
+
+    # ========================================================
+    # CAS 7 — H1 + M15 OPPOSÉS À H4
+    # ========================================================
+
+    if (
+        h1_bias != NEUTRAL
         and m15_bias != NEUTRAL
         and h1_bias != h4_bias
         and m15_bias != h4_bias
         and h1_bias == m15_bias
     ):
+
         return NEUTRAL
 
     # ========================================================
-    # H4 NEUTRAL
-    # ========================================================
-
-    if (
-        h4_bias == NEUTRAL
-        and h1_bias != NEUTRAL
-        and h1_bias == m15_bias
-    ):
-        return h1_bias
-
-    # ========================================================
-    # CAS RESTANT
+    # CAS DE SÉCURITÉ
     # ========================================================
 
     return NEUTRAL
@@ -1718,6 +1752,10 @@ def _run_internal_test():
         == NEUTRAL
     )
 
+    # --------------------------------------------------------
+    # H4 + H1 BUY
+    # --------------------------------------------------------
+
     assert (
         determiner_direction(
             {"bias": BUY},
@@ -1726,6 +1764,10 @@ def _run_internal_test():
         )
         == BUY
     )
+
+    # --------------------------------------------------------
+    # H4 + H1 SELL
+    # --------------------------------------------------------
 
     assert (
         determiner_direction(
@@ -1736,14 +1778,57 @@ def _run_internal_test():
         == SELL
     )
 
+    # --------------------------------------------------------
+    # CORRECTION IMPORTANTE :
+    # H4 peut déterminer seul la direction
+    # si H1 et M15 sont NEUTRAL
+    # --------------------------------------------------------
+
     assert (
         determiner_direction(
             {"bias": SELL},
             {"bias": NEUTRAL},
             {"bias": NEUTRAL},
         )
-        == NEUTRAL
+        == SELL
     )
+
+    assert (
+        determiner_direction(
+            {"bias": BUY},
+            {"bias": NEUTRAL},
+            {"bias": NEUTRAL},
+        )
+        == BUY
+    )
+
+    # --------------------------------------------------------
+    # H4 NEUTRAL :
+    # H1 + M15 alignés
+    # --------------------------------------------------------
+
+    assert (
+        determiner_direction(
+            {"bias": NEUTRAL},
+            {"bias": BUY},
+            {"bias": BUY},
+        )
+        == BUY
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": NEUTRAL},
+            {"bias": SELL},
+            {"bias": SELL},
+        )
+        == SELL
+    )
+
+    # --------------------------------------------------------
+    # H4 SELL mais H1 + M15 BUY :
+    # contradiction complète => NEUTRAL
+    # --------------------------------------------------------
 
     assert (
         determiner_direction(
@@ -1751,8 +1836,26 @@ def _run_internal_test():
             {"bias": BUY},
             {"bias": BUY},
         )
-        == BUY
+        == NEUTRAL
     )
+
+    # --------------------------------------------------------
+    # H4 BUY mais H1 + M15 SELL :
+    # contradiction complète => NEUTRAL
+    # --------------------------------------------------------
+
+    assert (
+        determiner_direction(
+            {"bias": BUY},
+            {"bias": SELL},
+            {"bias": SELL},
+        )
+        == NEUTRAL
+    )
+
+    # --------------------------------------------------------
+    # INDICATEURS
+    # --------------------------------------------------------
 
     indicators = (
         construire_contexte_indicateurs(
@@ -1786,6 +1889,10 @@ def _run_internal_test():
         == 6
     )
 
+    # --------------------------------------------------------
+    # STOP LOSS BUY
+    # --------------------------------------------------------
+
     fake = {
 
         "swings": {
@@ -1814,6 +1921,10 @@ def _run_internal_test():
         )
         == 90
     )
+
+    # --------------------------------------------------------
+    # STOP LOSS SELL
+    # --------------------------------------------------------
 
     assert (
         determiner_stop_loss(
