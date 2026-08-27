@@ -833,10 +833,33 @@ def construire_contexte_indicateurs(
 # FIBONACCI
 # ============================================================
 
+# ============================================================
+# FIBONACCI
+# ============================================================
+
 def construire_fibonacci(
     candles: list,
     direction: str,
+    structure_analysis: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    """
+    Construit l'analyse Fibonacci à partir des bougies
+    et de l'analyse de structure correspondante.
+
+    fibonacci.py attend :
+
+        calculer_fibonacci(
+            candles,
+            structure_analysis
+        )
+
+    et non :
+
+        calculer_fibonacci(
+            candles,
+            direction
+        )
+    """
 
     if not candles:
         return {}
@@ -844,6 +867,12 @@ def construire_fibonacci(
     direction = _normalize_direction(
         direction
     )
+
+    if not isinstance(
+        structure_analysis,
+        dict,
+    ):
+        return {}
 
     fonction = globals().get(
         "calculer_fibonacci"
@@ -856,18 +885,10 @@ def construire_fibonacci(
 
     try:
 
-        try:
-
-            result = fonction(
-                candles,
-                direction,
-            )
-
-        except TypeError:
-
-            result = fonction(
-                candles
-            )
+        result = fonction(
+            candles,
+            structure_analysis,
+        )
 
         if isinstance(
             result,
@@ -878,7 +899,7 @@ def construire_fibonacci(
     except Exception as exc:
 
         logger.warning(
-            "Fibonacci indisponible : %s",
+            "Analyse Fibonacci indisponible : %s",
             exc,
         )
 
