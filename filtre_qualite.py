@@ -15,10 +15,10 @@ Responsabilités :
 - retourner ACCEPT / REJECT / WAIT.
 
 IMPORTANT :
-Ce module est 100 % déterministe.
-Aucune IA.
-Aucun appel API.
-Aucune décision de Groq.
+- 100 % déterministe ;
+- aucune IA ;
+- aucun appel API ;
+- aucune décision de Groq.
 """
 
 from __future__ import annotations
@@ -94,8 +94,11 @@ def _normalize_direction(
     direction: Any,
 ) -> str:
     """
-    Normalise toutes les représentations
-    vers bullish / bearish / neutral.
+    Normalise une direction.
+
+    BUY / bullish / long  -> bullish
+    SELL / bearish / short -> bearish
+    NEUTRAL / none / vide -> neutral
     """
 
     value = str(
@@ -125,9 +128,7 @@ def _normalize_direction(
 def _validate_direction(
     direction: Any,
 ) -> str:
-    """
-    Valide une direction BUY / SELL.
-    """
+    """Valide BUY / SELL."""
 
     value = str(
         direction or ""
@@ -155,7 +156,6 @@ def verifier_score(
     """Vérifie le score final."""
 
     score = _safe_float(score)
-
     minimum_score = _safe_float(
         minimum_score
     )
@@ -187,7 +187,6 @@ def verifier_rr(
     """Vérifie le Risk / Reward."""
 
     rr = _safe_float(rr)
-
     minimum_rr = _safe_float(
         minimum_rr
     )
@@ -289,14 +288,14 @@ def verifier_coherence_mtf(
 
         H4 → H1 → M15 → M5
 
-    BUY / bullish = même direction.
-    SELL / bearish = même direction.
+    BUY / bullish / long  = bullish
+    SELL / bearish / short = bearish
 
-    Une timeframe absente ou NEUTRAL ne constitue
-    pas une opposition.
+    Une timeframe absente ou neutre ne constitue
+    pas une contradiction.
 
-    Une timeframe explicitement opposée bloque
-    l'alignement MTF.
+    Une timeframe explicitement opposée rend
+    le setup MTF incohérent.
     """
 
     target = _normalize_direction(
@@ -304,8 +303,9 @@ def verifier_coherence_mtf(
     )
 
     if target == NEUTRAL:
+
         raise ValueError(
-            "La direction MTF doit être BUY ou SELL."
+            "La direction doit être BUY ou SELL."
         )
 
     biases = {
@@ -328,7 +328,7 @@ def verifier_coherence_mtf(
         )
 
         # ----------------------------------------------------
-        # NEUTRAL
+        # NEUTRE
         # ----------------------------------------------------
 
         if normalized == NEUTRAL:
@@ -360,10 +360,6 @@ def verifier_coherence_mtf(
         reasons.append(
             f"{timeframe} opposé."
         )
-
-    # --------------------------------------------------------
-    # ALIGNEMENT STRICT
-    # --------------------------------------------------------
 
     aligned = oppositions == 0
 
@@ -402,6 +398,13 @@ def analyser_annonce(
 
         {
             "blocked": True
+        }
+
+    ou :
+
+        {
+            "impact": "high",
+            "minutes_after_event": 10
         }
     """
 
@@ -613,6 +616,7 @@ def filtrer_qualite(
     if score_ok:
 
         passed_checks += 1
+
         reasons.append(
             score_reason
         )
@@ -620,6 +624,7 @@ def filtrer_qualite(
     else:
 
         failed_checks += 1
+
         warnings.append(
             score_reason
         )
@@ -646,6 +651,7 @@ def filtrer_qualite(
     if rr_ok:
 
         passed_checks += 1
+
         reasons.append(
             rr_reason
         )
@@ -653,6 +659,7 @@ def filtrer_qualite(
     else:
 
         failed_checks += 1
+
         warnings.append(
             rr_reason
         )
@@ -678,6 +685,7 @@ def filtrer_qualite(
     if confirmations_ok:
 
         passed_checks += 1
+
         reasons.append(
             confirmation_reason
         )
@@ -685,6 +693,7 @@ def filtrer_qualite(
     else:
 
         failed_checks += 1
+
         warnings.append(
             confirmation_reason
         )
@@ -710,6 +719,7 @@ def filtrer_qualite(
     if contradictions_ok:
 
         passed_checks += 1
+
         reasons.append(
             contradiction_reason
         )
@@ -717,6 +727,7 @@ def filtrer_qualite(
     else:
 
         failed_checks += 1
+
         warnings.append(
             contradiction_reason
         )
@@ -738,6 +749,7 @@ def filtrer_qualite(
     if mtf_aligned:
 
         passed_checks += 1
+
         reasons.extend(
             mtf_reasons
         )
@@ -745,6 +757,7 @@ def filtrer_qualite(
     else:
 
         failed_checks += 1
+
         warnings.extend(
             mtf_reasons
         )
@@ -763,6 +776,7 @@ def filtrer_qualite(
     if news_blocked:
 
         failed_checks += 1
+
         warnings.append(
             news_reason
         )
@@ -770,6 +784,7 @@ def filtrer_qualite(
     else:
 
         passed_checks += 1
+
         reasons.append(
             news_reason
         )
@@ -788,9 +803,6 @@ def filtrer_qualite(
     # ========================================================
     # DÉCISION
     # ========================================================
-
-    # Une annonce HIGH impact proche
-    # met le setup en attente.
 
     if news_blocked:
 
@@ -898,14 +910,14 @@ def resume_filtre(
 
 
 # ============================================================
-# TEST
+# TESTS INTERNES
 # ============================================================
 
 def _run_internal_test() -> None:
     """Tests internes du filtre qualité."""
 
     # ========================================================
-    # NORMALISATION
+    # TEST NORMALISATION
     # ========================================================
 
     assert _normalize_direction("BUY") == BULLISH
@@ -918,8 +930,10 @@ def _run_internal_test() -> None:
     assert _normalize_direction("bearish") == BEARISH
     assert _normalize_direction("short") == BEARISH
 
+    assert _normalize_direction("neutral") == NEUTRAL
+
     # ========================================================
-    # MTF BUY
+    # TEST MTF BUY
     # ========================================================
 
     mtf_buy, _ = verifier_coherence_mtf(
@@ -933,7 +947,7 @@ def _run_internal_test() -> None:
     assert mtf_buy is True
 
     # ========================================================
-    # MTF SELL
+    # TEST MTF SELL
     # ========================================================
 
     mtf_sell, _ = verifier_coherence_mtf(
@@ -947,7 +961,21 @@ def _run_internal_test() -> None:
     assert mtf_sell is True
 
     # ========================================================
-    # MTF CONTRADICTION
+    # TEST MTF AVEC BUY
+    # ========================================================
+
+    mtf_buy_labels, _ = verifier_coherence_mtf(
+        direction="BUY",
+        h4_bias="BUY",
+        h1_bias="bullish",
+        m15_bias="long",
+        m5_bias="BUY",
+    )
+
+    assert mtf_buy_labels is True
+
+    # ========================================================
+    # TEST MTF CONTRADICTION
     # ========================================================
 
     mtf_conflict, _ = verifier_coherence_mtf(
@@ -959,6 +987,20 @@ def _run_internal_test() -> None:
     )
 
     assert mtf_conflict is False
+
+    # ========================================================
+    # TEST MTF NEUTRAL
+    # ========================================================
+
+    mtf_neutral, _ = verifier_coherence_mtf(
+        direction="BUY",
+        h4_bias="bullish",
+        h1_bias="neutral",
+        m15_bias="bullish",
+        m5_bias="bullish",
+    )
+
+    assert mtf_neutral is True
 
     # ========================================================
     # CAS ACCEPTÉ
@@ -1045,7 +1087,7 @@ def _run_internal_test() -> None:
     assert result["status"] == REJECT
 
     # ========================================================
-    # CAS ANNONCE
+    # CAS ANNONCE HIGH
     # ========================================================
 
     result = filtrer_qualite(
@@ -1079,6 +1121,11 @@ def _run_internal_test() -> None:
         is False
     )
 
+    assert (
+        result["news_blocked"]
+        is True
+    )
+
     # ========================================================
     # CAS CONTRADICTION MTF
     # ========================================================
@@ -1107,21 +1154,38 @@ def _run_internal_test() -> None:
     assert result["mtf_aligned"] is False
 
     # ========================================================
-    # CAS NEUTRAL
+    # CAS SELL COMPLET
     # ========================================================
 
-    mtf_neutral, _ = verifier_coherence_mtf(
-        direction="BUY",
-        h4_bias="bullish",
-        h1_bias="neutral",
-        m15_bias="bullish",
-        m5_bias="bullish",
+    result = filtrer_qualite(
+        direction=SELL,
+
+        score_result={
+            "final_score": 90,
+            "confirmations": 5,
+            "contradictions": 0,
+        },
+
+        rr_result={
+            "rr_tp2": 3.0,
+        },
+
+        h4_bias="bearish",
+        h1_bias="bearish",
+        m15_bias="bearish",
+        m5_bias="bearish",
+
+        news=None,
     )
 
-    assert mtf_neutral is True
+    assert result["status"] == ACCEPT
+
+    assert result["direction"] == SELL
+
+    assert result["ready_for_signal"] is True
 
     logger.info(
-        "Test filtre_qualite réussi."
+        "Tous les tests filtre_qualite réussis."
     )
 
 
@@ -1149,17 +1213,21 @@ if __name__ == "__main__":
 
         _run_internal_test()
 
-        print("\n✅ FILTRE QUALITÉ : OK")
+        print()
+        print("✅ FILTRE QUALITÉ : OK")
         print(
             "Le filtre final est opérationnel."
         )
 
     except Exception as exc:
 
+        print()
         print(
-            "\n❌ TEST FILTRE QUALITÉ ÉCHOUÉ"
+            "❌ TEST FILTRE QUALITÉ ÉCHOUÉ"
         )
 
         print(
             f"Erreur : {type(exc).__name__}: {exc}"
         )
+
+        raise
