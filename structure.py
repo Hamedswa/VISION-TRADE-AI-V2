@@ -94,6 +94,29 @@ def _price(
     return float(candle[key])
 
 
+def _get_break_value(
+    event: Any,
+    key: str,
+    default: Any = None,
+) -> Any:
+    """
+    Lit une propriété d'un StructureBreak ou d'un dict.
+
+    Cette fonction rend le moteur compatible avec :
+        - StructureBreak(...)
+        - {"index": ..., "direction": ..., "break_type": ...}
+    """
+
+    if isinstance(event, dict):
+        return event.get(key, default)
+
+    return getattr(
+        event,
+        key,
+        default,
+    )
+
+
 # ============================================================
 # MODÈLES
 # ============================================================
@@ -173,9 +196,6 @@ def detecter_swing_highs(
 ) -> List[SwingPoint]:
     """
     Détecte les Swing High.
-
-    Un sommet est considéré comme Swing High si son high
-    est supérieur ou égal aux highs des bougies voisines.
     """
 
     _validate_candles(candles)
@@ -595,12 +615,14 @@ def detecter_choch(
 
 
 # ============================================================
-# ORDER BLOCKS — VERSION CORRIGÉE
+# ORDER BLOCKS
 # ============================================================
 
 def detecter_order_blocks(
     candles: Sequence[dict],
-    structure_breaks: Optional[Sequence[StructureBreak]] = None,
+    structure_breaks: Optional[
+        Sequence[Any]
+    ] = None,
     lookback: int = DEFAULT_OB_LOOKBACK,
 ) -> List[OrderBlock]:
     """
@@ -617,8 +639,14 @@ def detecter_order_blocks(
             structure_breaks,
         )
 
-    Si structure_breaks n'est pas fourni,
-    les BOS et CHoCH sont calculés automatiquement.
+    IMPORTANT :
+    structure_breaks peut contenir :
+        - des objets StructureBreak
+        - des dictionnaires
+
+    Cette compatibilité évite l'erreur :
+
+        'dict' object has no attribute 'break_type'
 
     OB bullish :
         dernière bougie bearish avant une cassure bullish.
@@ -673,18 +701,52 @@ def detecter_order_blocks(
 
     for event in structure_breaks:
 
-        if event.break_type not in {
+        break_type = _get_break_value(
+            event,
+            "break_type",
+        )
+
+        direction = _get_break_value(
+            event,
+            "direction",
+        )
+
+        event_index = _get_break_value(
+            event,
+            "index",
+        )
+
+        if break_type not in {
             "BOS",
             "CHoCH",
         }:
             continue
 
-        if event.index <= 0:
+        if direction not in {
+            BULLISH,
+            BEARISH,
+        }:
+            continue
+
+        if event_index is None:
+            continue
+
+        try:
+            event_index = int(
+                event_index
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if event_index <= 0:
             continue
 
         start = max(
             0,
-            event.index - lookback,
+            event_index - lookback,
         )
 
         selected = None
@@ -694,7 +756,7 @@ def detecter_order_blocks(
         # ====================================================
 
         for index in range(
-            event.index - 1,
+            event_index - 1,
             start - 1,
             -1,
         ):
@@ -714,7 +776,7 @@ def detecter_order_blocks(
             # Bullish OB :
             # dernière bougie bearish.
             if (
-                event.direction == BULLISH
+                direction == BULLISH
                 and close_price < open_price
             ):
                 selected = index
@@ -723,7 +785,7 @@ def detecter_order_blocks(
             # Bearish OB :
             # dernière bougie bullish.
             if (
-                event.direction == BEARISH
+                direction == BEARISH
                 and close_price > open_price
             ):
                 selected = index
@@ -771,7 +833,7 @@ def detecter_order_blocks(
         order_blocks.append(
             OrderBlock(
                 index=selected,
-                direction=event.direction,
+                direction=direction,
                 high=high,
                 low=low,
                 body_high=body_high,
