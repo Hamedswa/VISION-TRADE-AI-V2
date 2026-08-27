@@ -833,10 +833,6 @@ def construire_contexte_indicateurs(
 # FIBONACCI
 # ============================================================
 
-# ============================================================
-# FIBONACCI
-# ============================================================
-
 def construire_fibonacci(
     candles: list,
     direction: str,
