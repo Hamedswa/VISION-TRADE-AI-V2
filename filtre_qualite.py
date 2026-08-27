@@ -207,7 +207,6 @@ def verifier_contradictions(
         f"Maximum autorisé : {maximum_contradictions}.",
     )
 
-
 # ============================================================
 # COHÉRENCE MULTI-TIMEFRAME
 # ============================================================
@@ -220,18 +219,47 @@ def verifier_coherence_mtf(
     m5_bias: Optional[str] = None,
 ) -> tuple[bool, List[str]]:
     """
-    Vérifie H4 / H1 / M15 / M5.
+    Vérifie la cohérence H4 / H1 / M15 / M5.
 
-    BUY / bullish / long = même direction.
-    SELL / bearish / short = même direction.
+    BUY / bullish / long  = direction haussière
+    SELL / bearish / short = direction baissière
 
-    NEUTRAL / None = aucune opposition.
+    Une timeframe neutre ne constitue pas une contradiction.
 
-    Une seule timeframe opposée suffit à rendre
-    le MTF non aligné.
+    Une timeframe explicitement opposée constitue une
+    contradiction.
     """
 
-    target = _normalize_direction(direction)
+    # --------------------------------------------------------
+    # NORMALISATION DE LA DIRECTION
+    # --------------------------------------------------------
+
+    raw_direction = str(
+        direction or ""
+    ).lower().strip()
+
+    if raw_direction in {
+        "buy",
+        "bullish",
+        "long",
+    }:
+        target = "bullish"
+
+    elif raw_direction in {
+        "sell",
+        "bearish",
+        "short",
+    }:
+        target = "bearish"
+
+    else:
+        raise ValueError(
+            "direction doit être BUY, SELL, bullish ou bearish."
+        )
+
+    # --------------------------------------------------------
+    # BIAIS DES TIMEFRAMES
+    # --------------------------------------------------------
 
     biases = {
         "H4": h4_bias,
@@ -243,23 +271,62 @@ def verifier_coherence_mtf(
     reasons: List[str] = []
     oppositions = 0
 
+    # --------------------------------------------------------
+    # ANALYSE
+    # --------------------------------------------------------
+
     for timeframe, bias in biases.items():
 
-        normalized = _normalize_direction(bias)
-
-        # Pas d'information
-        if normalized == "NEUTRAL":
+        if bias is None:
             continue
 
-        # Aligné
+        normalized = str(
+            bias
+        ).lower().strip()
+
+        # BUY / bullish / long
+        if normalized in {
+            "buy",
+            "bullish",
+            "long",
+        }:
+            normalized = "bullish"
+
+        # SELL / bearish / short
+        elif normalized in {
+            "sell",
+            "bearish",
+            "short",
+        }:
+            normalized = "bearish"
+
+        # NEUTRAL
+        elif normalized in {
+            "",
+            "neutral",
+            "none",
+            "null",
+        }:
+            continue
+
+        # ----------------------------------------------------
+        # ALIGNEMENT
+        # ----------------------------------------------------
+
         if normalized == target:
 
             reasons.append(
                 f"{timeframe} aligné."
             )
 
-        # Opposé
-        else:
+        # ----------------------------------------------------
+        # OPPOSITION
+        # ----------------------------------------------------
+
+        elif normalized in {
+            "bullish",
+            "bearish",
+        }:
 
             oppositions += 1
 
@@ -267,8 +334,16 @@ def verifier_coherence_mtf(
                 f"{timeframe} opposé."
             )
 
+    # --------------------------------------------------------
+    # RÈGLE DE COHÉRENCE
+    # --------------------------------------------------------
+
+    aligned = (
+        oppositions == 0
+    )
+
     return (
-        oppositions == 0,
+        aligned,
         reasons,
     )
 
