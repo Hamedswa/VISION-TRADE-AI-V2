@@ -508,35 +508,56 @@ def determiner_direction(
     m15: Dict[str, Any],
 ) -> str:
     """
-    Direction principale.
-
-    Priorité :
-
-        H4 = tendance
-        H1 = structure
-        M15 = contexte
-
-    Règle :
-
-        2 confirmations minimum
-        parmi H4 / H1 / M15.
-
-    M5 est totalement exclu.
+    Détermine la direction principale selon la hiérarchie
+    multi-timeframe de Vision Trade AI V2.
+    Hiérarchie :
+        H4  -> biais global
+        H1  -> validation structurelle
+        M15 -> validation contexte
+        M5  -> traité séparément comme confirmation
+    Règles :
+        1. H4 donne la direction dominante.
+        2. H1 peut confirmer ou rester neutre.
+        3. M15 peut confirmer ou rester neutre.
+        4. Une contradiction H1 + M15 contre H4 invalide H4.
+        5. Le M5 ne détermine jamais la direction.
+        6. Si H4 est neutre, H1 + M15 doivent être d'accord.
     """
-
-    h4_bias = _extract_bias(h4)
-    h1_bias = _extract_bias(h1)
-    m15_bias = _extract_bias(m15)
-
-    biases = [
-        h4_bias,
-        h1_bias,
-        m15_bias,
-    ]
-
-    buy_count = biases.count(BUY)
-    sell_count = biases.count(SELL)
-
+    h4_bias = _normalize_direction(
+        h4.get("bias", NEUTRAL)
+    )
+    h1_bias = _normalize_direction(
+        h1.get("bias", NEUTRAL)
+    )
+    m15_bias = _normalize_direction(
+        m15.get("bias", NEUTRAL)
+    )
+    # ========================================================
+    # CAS 1 : H4 définit clairement la tendance
+    # ========================================================
+    if h4_bias in (BUY, SELL):
+        # H1 et M15 sont tous les deux opposés à H4.
+        # Le contexte est contradictoire.
+        if (
+            h1_bias != NEUTRAL
+            and m15_bias != NEUTRAL
+            and h1_bias != h4_bias
+            and m15_bias != h4_bias
+        ):
+            return NEUTRAL
+        # H4 reste la direction principale.
+        return h4_bias
+    # ========================================================
+    # CAS 2 : H4 neutre
+    # ========================================================
+    if h1_bias == BUY and m15_bias == BUY:
+        return BUY
+    if h1_bias == SELL and m15_bias == SELL:
+        return SELL
+    # ========================================================
+    # CAS 3 : aucune direction suffisamment fiable
+    # ========================================================
+    return NEUTRAL
     # --------------------------------------------------------
     # BUY
     # --------------------------------------------------------
