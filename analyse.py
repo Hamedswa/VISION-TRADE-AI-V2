@@ -508,75 +508,90 @@ def determiner_direction(
     m15: Dict[str, Any],
 ) -> str:
     """
-    Détermine la direction principale selon la hiérarchie
-    multi-timeframe de Vision Trade AI V2.
+    Détermine la direction principale du marché.
+
     Hiérarchie :
-        H4  -> biais global
-        H1  -> validation structurelle
-        M15 -> validation contexte
-        M5  -> traité séparément comme confirmation
+
+        H4  = tendance globale
+        H1  = structure principale
+        M15 = contexte
+
     Règles :
-        1. H4 donne la direction dominante.
-        2. H1 peut confirmer ou rester neutre.
-        3. M15 peut confirmer ou rester neutre.
-        4. Une contradiction H1 + M15 contre H4 invalide H4.
-        5. Le M5 ne détermine jamais la direction.
-        6. Si H4 est neutre, H1 + M15 doivent être d'accord.
+
+    1. H4 est l'ancrage principal.
+    2. H1 et M15 peuvent être NEUTRAL sans annuler H4.
+    3. H1/M15 opposés à H4 peuvent bloquer la direction
+       lorsqu'ils sont tous les deux opposés.
+    4. Si H4 et H1 sont alignés, la direction est validée.
+    5. Si H4 est NEUTRAL, H1 + M15 doivent être alignés.
+    6. M5 n'intervient jamais ici.
     """
+
     h4_bias = _normalize_direction(
         h4.get("bias", NEUTRAL)
     )
+
     h1_bias = _normalize_direction(
         h1.get("bias", NEUTRAL)
     )
+
     m15_bias = _normalize_direction(
         m15.get("bias", NEUTRAL)
     )
+
     # ========================================================
-    # CAS 1 : H4 définit clairement la tendance
+    # H4 + H1 ALIGNÉS
     # ========================================================
-    if h4_bias in (BUY, SELL):
-        # H1 et M15 sont tous les deux opposés à H4.
-        # Le contexte est contradictoire.
-        if (
-            h1_bias != NEUTRAL
-            and m15_bias != NEUTRAL
-            and h1_bias != h4_bias
-            and m15_bias != h4_bias
-        ):
-            return NEUTRAL
-        # H4 reste la direction principale.
+
+    if h4_bias != NEUTRAL and h4_bias == h1_bias:
         return h4_bias
+
     # ========================================================
-    # CAS 2 : H4 neutre
+    # H4 + M15 ALIGNÉS
     # ========================================================
-    if h1_bias == BUY and m15_bias == BUY:
-        return BUY
-    if h1_bias == SELL and m15_bias == SELL:
-        return SELL
+
+    if h4_bias != NEUTRAL and h4_bias == m15_bias:
+        return h4_bias
+
     # ========================================================
-    # CAS 3 : aucune direction suffisamment fiable
+    # H4 SEUL MAIS H1/M15 NEUTRES
     # ========================================================
-    return NEUTRAL
-    # --------------------------------------------------------
-    # BUY
-    # --------------------------------------------------------
 
-    if buy_count >= 2:
+    if (
+        h4_bias != NEUTRAL
+        and h1_bias == NEUTRAL
+        and m15_bias == NEUTRAL
+    ):
+        return h4_bias
 
-        return BUY
+    # ========================================================
+    # H4 CONTREDIT PAR H1 + M15
+    # ========================================================
 
-    # --------------------------------------------------------
-    # SELL
-    # --------------------------------------------------------
+    if (
+        h4_bias != NEUTRAL
+        and h1_bias != NEUTRAL
+        and m15_bias != NEUTRAL
+        and h1_bias != h4_bias
+        and m15_bias != h4_bias
+        and h1_bias == m15_bias
+    ):
+        return NEUTRAL
 
-    if sell_count >= 2:
+    # ========================================================
+    # H4 NEUTRAL
+    # ========================================================
 
-        return SELL
+    if (
+        h4_bias == NEUTRAL
+        and h1_bias != NEUTRAL
+        and h1_bias == m15_bias
+    ):
+        return h1_bias
 
-    # --------------------------------------------------------
-    # Aucun consensus
-    # --------------------------------------------------------
+    # ========================================================
+    # CAS RESTANT
+    # ========================================================
 
     return NEUTRAL
 
