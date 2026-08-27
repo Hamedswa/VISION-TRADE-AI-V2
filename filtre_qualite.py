@@ -15,16 +15,15 @@ Responsabilités :
 - retourner ACCEPT / REJECT / WAIT.
 
 IMPORTANT :
-Ce module est 100 % déterministe.
-Aucune IA.
-Aucun appel API.
-Aucune décision de Groq.
+- 100 % déterministe ;
+- aucune IA ;
+- aucun appel API ;
+- aucune décision de Groq.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
 
@@ -48,49 +47,7 @@ DEFAULT_MIN_RR = 2.0
 DEFAULT_MIN_CONFIRMATIONS = 3
 DEFAULT_MAX_CONTRADICTIONS = 1
 
-# Une annonce HIGH impact proche peut bloquer le signal.
 DEFAULT_NEWS_BLOCK_MINUTES = 30
-
-
-# ============================================================
-# MODÈLE
-# ============================================================
-
-@dataclass
-class QualityResult:
-    """
-    Résultat du filtre de qualité.
-    """
-
-    status: str
-
-    direction: str
-
-    score: float
-    minimum_score: float
-
-    rr: float
-    minimum_rr: float
-
-    confirmations: int
-    minimum_confirmations: int
-
-    contradictions: int
-    maximum_contradictions: int
-
-    mtf_aligned: bool
-
-    news_blocked: bool
-
-    quality: str
-
-    reasons: List[str]
-    warnings: List[str]
-
-    passed_checks: int
-    failed_checks: int
-
-    ready_for_signal: bool
 
 
 # ============================================================
@@ -111,10 +68,7 @@ def _safe_float(
     try:
         return float(value)
 
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
@@ -132,33 +86,55 @@ def _safe_int(
     try:
         return int(value)
 
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
 def _normalize_direction(
-    direction: str,
+    direction: Any,
 ) -> str:
     """
-    Normalise BUY / SELL.
+    Normalise toutes les représentations de direction.
+
+    BUY / bullish / long  -> BUY
+    SELL / bearish / short -> SELL
+    NEUTRAL / none / vide -> NEUTRAL
     """
 
-    direction = str(
+    value = str(
         direction or ""
-    ).upper().strip()
+    ).lower().strip()
 
-    if direction not in {
-        BUY,
-        SELL,
-    }:
-        raise ValueError(
-            "La direction doit être BUY ou SELL."
-        )
+    mapping = {
+        "buy": BUY,
+        "bullish": BUY,
+        "long": BUY,
 
-    return direction
+        "sell": SELL,
+        "bearish": SELL,
+        "short": SELL,
+
+        "neutral": "NEUTRAL",
+        "none": "NEUTRAL",
+        "": "NEUTRAL",
+    }
+
+    return mapping.get(
+        value,
+        "NEUTRAL",
+    )
+
+
+def _normalize_impact(
+    impact: Any,
+) -> str:
+    """
+    Normalise l'impact d'une annonce.
+    """
+
+    return str(
+        impact or ""
+    ).lower().strip()
 
 
 # ============================================================
@@ -174,13 +150,16 @@ def verifier_score(
     """
 
     score = _safe_float(score)
-
     minimum_score = _safe_float(
         minimum_score
     )
 
-    if score >= minimum_score:
+    if minimum_score < 0:
+        raise ValueError(
+            "minimum_score ne peut pas être négatif."
+        )
 
+    if score >= minimum_score:
         return (
             True,
             f"Score {score:.1f}/100 >= "
@@ -208,13 +187,16 @@ def verifier_rr(
     """
 
     rr = _safe_float(rr)
-
     minimum_rr = _safe_float(
         minimum_rr
     )
 
-    if rr >= minimum_rr:
+    if minimum_rr <= 0:
+        raise ValueError(
+            "minimum_rr doit être > 0."
+        )
 
+    if rr >= minimum_rr:
         return (
             True,
             f"RR {rr:.2f} >= "
@@ -249,19 +231,21 @@ def verifier_confirmations(
         minimum_confirmations
     )
 
-    if confirmations >= minimum_confirmations:
+    if minimum_confirmations < 0:
+        raise ValueError(
+            "minimum_confirmations ne peut pas être négatif."
+        )
 
+    if confirmations >= minimum_confirmations:
         return (
             True,
-            f"{confirmations} confirmations "
-            f"présentes.",
+            f"{confirmations} confirmation(s) présentes.",
         )
 
     return (
         False,
-        f"Seulement {confirmations} "
-        f"confirmation(s). Minimum : "
-        f"{minimum_confirmations}.",
+        f"Seulement {confirmations} confirmation(s). "
+        f"Minimum : {minimum_confirmations}.",
     )
 
 
@@ -285,8 +269,12 @@ def verifier_contradictions(
         maximum_contradictions
     )
 
-    if contradictions <= maximum_contradictions:
+    if maximum_contradictions < 0:
+        raise ValueError(
+            "maximum_contradictions ne peut pas être négatif."
+        )
 
+    if contradictions <= maximum_contradictions:
         return (
             True,
             f"{contradictions} contradiction(s).",
@@ -314,13 +302,32 @@ def verifier_coherence_mtf(
     """
     Vérifie la cohérence H4 / H1 / M15 / M5.
 
-    Une timeframe neutre ne constitue pas une contradiction.
+    Règles :
 
-    Une timeframe explicitement opposée constitue une
-    contradiction.
+    - timeframe absente -> ignorée ;
+    - NEUTRAL -> ignorée ;
+    - timeframe alignée -> confirmation ;
+    - timeframe opposée -> conflit.
+
+    IMPORTANT :
+    BUY / bullish sont considérés comme équivalents.
+    SELL / bearish sont considérés comme équivalents.
+
+    Une seule timeframe opposée suffit à considérer
+    l'alignement MTF comme faux.
     """
 
-    direction = direction.lower()
+    direction = _normalize_direction(
+        direction
+    )
+
+    if direction not in {
+        BUY,
+        SELL,
+    }:
+        raise ValueError(
+            "La direction doit être BUY ou SELL."
+        )
 
     biases = {
         "H4": h4_bias,
@@ -329,29 +336,34 @@ def verifier_coherence_mtf(
         "M5": m5_bias,
     }
 
-    reasons = []
+    reasons: List[str] = []
+
     oppositions = 0
+    alignments = 0
 
     for timeframe, bias in biases.items():
 
-        if not bias:
+        if bias is None:
             continue
 
-        normalized = str(
+        normalized = _normalize_direction(
             bias
-        ).lower().strip()
+        )
+
+        if normalized == "NEUTRAL":
+            continue
 
         if normalized == direction:
+
+            alignments += 1
 
             reasons.append(
                 f"{timeframe} aligné."
             )
 
         elif normalized in {
-            BUY.lower(),
-            SELL.lower(),
-            "bullish",
-            "bearish",
+            BUY,
+            SELL,
         }:
 
             oppositions += 1
@@ -360,11 +372,18 @@ def verifier_coherence_mtf(
                 f"{timeframe} opposé."
             )
 
-    # Une seule opposition peut être tolérée
-    # au stade du filtre global.
-    aligned = oppositions == 0
+    # Une opposition = conflit MTF.
+    mtf_aligned = oppositions == 0
 
-    return aligned, reasons
+    if alignments == 0 and oppositions == 0:
+        reasons.append(
+            "Aucune direction MTF exploitable."
+        )
+
+    return (
+        mtf_aligned,
+        reasons,
+    )
 
 
 # ============================================================
@@ -398,11 +417,16 @@ def analyser_annonce(
             "blocked": True
         }
 
-    IMPORTANT :
-    annonces.py reste responsable de récupérer et préparer
-    les annonces. Ce module décide uniquement si elles
-    doivent bloquer le setup.
+    annonces.py récupère les données.
+
+    filtre_qualite.py décide uniquement si
+    l'annonce bloque le setup.
     """
+
+    if block_minutes < 0:
+        raise ValueError(
+            "block_minutes ne peut pas être négatif."
+        )
 
     if not news:
         return (
@@ -411,26 +435,21 @@ def analyser_annonce(
         )
 
     if news.get("blocked") is True:
-
         return (
             True,
             "Le calendrier économique indique "
             "une période bloquée.",
         )
 
-    impact = str(
-        news.get(
-            "impact",
-            "",
-        )
-    ).lower().strip()
+    impact = _normalize_impact(
+        news.get("impact")
+    )
 
     minutes = news.get(
         "minutes_to_event"
     )
 
     if minutes is None:
-
         minutes = news.get(
             "minutes_until"
         )
@@ -439,6 +458,10 @@ def analyser_annonce(
         minutes,
         default=999999,
     )
+
+    # --------------------------------------------------------
+    # AVANT L'ÉVÉNEMENT
+    # --------------------------------------------------------
 
     if (
         impact == "high"
@@ -451,7 +474,10 @@ def analyser_annonce(
             f"{minutes:.0f} minute(s).",
         )
 
-    # Événement déjà commencé / fenêtre post-news.
+    # --------------------------------------------------------
+    # APRÈS L'ÉVÉNEMENT
+    # --------------------------------------------------------
+
     minutes_after = news.get(
         "minutes_after_event"
     )
@@ -477,6 +503,10 @@ def analyser_annonce(
                 f"depuis la publication.",
             )
 
+    # --------------------------------------------------------
+    # HIGH HORS FENÊTRE
+    # --------------------------------------------------------
+
     if impact == "high":
 
         return (
@@ -485,12 +515,20 @@ def analyser_annonce(
             "mais hors fenêtre de blocage.",
         )
 
+    # --------------------------------------------------------
+    # MEDIUM
+    # --------------------------------------------------------
+
     if impact == "medium":
 
         return (
             False,
             "Annonce MEDIUM impact détectée.",
         )
+
+    # --------------------------------------------------------
+    # LOW / UNKNOWN
+    # --------------------------------------------------------
 
     return (
         False,
@@ -509,8 +547,11 @@ def determiner_qualite(
     news_blocked: bool,
 ) -> str:
     """
-    Détermine une qualité globale.
+    Détermine la qualité globale du setup.
     """
+
+    score = _safe_float(score)
+    rr = _safe_float(rr)
 
     if news_blocked:
         return "BLOCKED"
@@ -566,15 +607,16 @@ def filtrer_qualite(
         direction
     )
 
-    score_result = (
-        score_result
-        or {}
-    )
+    if direction not in {
+        BUY,
+        SELL,
+    }:
+        raise ValueError(
+            "La direction doit être BUY ou SELL."
+        )
 
-    rr_result = (
-        rr_result
-        or {}
-    )
+    score_result = score_result or {}
+    rr_result = rr_result or {}
 
     reasons: List[str] = []
     warnings: List[str] = []
@@ -693,7 +735,7 @@ def filtrer_qualite(
         )
 
     # ========================================================
-    # MTF
+    # COHÉRENCE MTF
     # ========================================================
 
     mtf_aligned, mtf_reasons = (
@@ -764,8 +806,8 @@ def filtrer_qualite(
     # DÉCISION
     # ========================================================
 
-    # Une annonce HIGH impact proche = WAIT,
-    # pas REJECT définitif.
+    # Une annonce HIGH impact proche ne détruit pas
+    # définitivement le setup : on attend.
     if news_blocked:
 
         status = WAIT
@@ -788,6 +830,10 @@ def filtrer_qualite(
         status == ACCEPT
     )
 
+    # ========================================================
+    # SORTIE
+    # ========================================================
+
     return {
         "status": status,
 
@@ -800,11 +846,13 @@ def filtrer_qualite(
         "minimum_rr": minimum_rr,
 
         "confirmations": confirmations,
+
         "minimum_confirmations": (
             minimum_confirmations
         ),
 
         "contradictions": contradictions,
+
         "maximum_contradictions": (
             maximum_contradictions
         ),
@@ -820,11 +868,10 @@ def filtrer_qualite(
         "warnings": warnings,
 
         "passed_checks": passed_checks,
+
         "failed_checks": failed_checks,
 
-        "ready_for_signal": (
-            ready_for_signal
-        ),
+        "ready_for_signal": ready_for_signal,
     }
 
 
@@ -872,17 +919,31 @@ def resume_filtre(
 
 
 # ============================================================
-# TEST
+# TESTS INTERNES
 # ============================================================
 
 def _run_internal_test() -> None:
     """
-    Tests internes.
+    Tests internes du filtre qualité.
     """
 
-    # --------------------------------------------------------
+    # ========================================================
+    # TEST NORMALISATION
+    # ========================================================
+
+    assert _normalize_direction("BUY") == BUY
+    assert _normalize_direction("buy") == BUY
+    assert _normalize_direction("bullish") == BUY
+    assert _normalize_direction("long") == BUY
+
+    assert _normalize_direction("SELL") == SELL
+    assert _normalize_direction("sell") == SELL
+    assert _normalize_direction("bearish") == SELL
+    assert _normalize_direction("short") == SELL
+
+    # ========================================================
     # CAS ACCEPTÉ
-    # --------------------------------------------------------
+    # ========================================================
 
     result = filtrer_qualite(
         direction=BUY,
@@ -912,9 +973,11 @@ def _run_internal_test() -> None:
         is True
     )
 
-    # --------------------------------------------------------
+    assert result["mtf_aligned"] is True
+
+    # ========================================================
     # CAS SCORE INSUFFISANT
-    # --------------------------------------------------------
+    # ========================================================
 
     result = filtrer_qualite(
         direction=BUY,
@@ -937,9 +1000,14 @@ def _run_internal_test() -> None:
 
     assert result["status"] == REJECT
 
-    # --------------------------------------------------------
+    assert (
+        result["ready_for_signal"]
+        is False
+    )
+
+    # ========================================================
     # CAS RR INSUFFISANT
-    # --------------------------------------------------------
+    # ========================================================
 
     result = filtrer_qualite(
         direction=BUY,
@@ -962,9 +1030,9 @@ def _run_internal_test() -> None:
 
     assert result["status"] == REJECT
 
-    # --------------------------------------------------------
-    # CAS ANNONCE
-    # --------------------------------------------------------
+    # ========================================================
+    # CAS ANNONCE HIGH
+    # ========================================================
 
     result = filtrer_qualite(
         direction=BUY,
@@ -997,9 +1065,11 @@ def _run_internal_test() -> None:
         is False
     )
 
-    # --------------------------------------------------------
+    assert result["news_blocked"] is True
+
+    # ========================================================
     # CAS CONTRADICTION MTF
-    # --------------------------------------------------------
+    # ========================================================
 
     result = filtrer_qualite(
         direction=BUY,
@@ -1021,6 +1091,32 @@ def _run_internal_test() -> None:
     )
 
     assert result["status"] == REJECT
+
+    assert result["mtf_aligned"] is False
+
+    # ========================================================
+    # TEST BUY / SELL MIXTE
+    # ========================================================
+
+    mtf_buy = verifier_coherence_mtf(
+        direction="BUY",
+        h4_bias="bullish",
+        h1_bias="BUY",
+        m15_bias="bullish",
+        m5_bias="BUY",
+    )
+
+    assert mtf_buy[0] is True
+
+    mtf_sell = verifier_coherence_mtf(
+        direction="SELL",
+        h4_bias="bearish",
+        h1_bias="SELL",
+        m15_bias="bearish",
+        m5_bias="SELL",
+    )
+
+    assert mtf_sell[0] is True
 
     logger.info(
         "Test filtre_qualite réussi."
@@ -1051,7 +1147,9 @@ if __name__ == "__main__":
 
         _run_internal_test()
 
-        print("\n✅ FILTRE QUALITÉ : OK")
+        print(
+            "\n✅ FILTRE QUALITÉ : OK"
+        )
 
         print(
             "Le filtre final est opérationnel."
@@ -1064,5 +1162,5 @@ if __name__ == "__main__":
         )
 
         print(
-            f"Erreur : {exc}"
+            f"Erreur : {type(exc).__name__}: {exc}"
         )
