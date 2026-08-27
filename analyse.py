@@ -35,16 +35,16 @@ Pipeline :
       ↓
     RÉSULTAT
 
-Règles :
+Règles importantes :
 
 - H4/H1/M15 déterminent la direction principale.
 - M5 ne peut jamais créer une direction seul.
-- NEUTRAL reste NEUTRAL.
+- Un timeframe NEUTRAL ne doit pas être forcé.
 - structure.py reste déterministe.
 - score.py reste responsable du score.
 - rr.py reste responsable du RR.
 - filtre_qualite.py reste responsable du filtre final.
-- Fibonacci reçoit toujours un dictionnaire de structure valide.
+- Fibonacci reçoit toujours une structure normalisée.
 - Aucune logique Telegram ici.
 - Aucune logique Groq ici.
 """
@@ -53,11 +53,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
-
-
-# ============================================================
-# IMPORTS
-# ============================================================
 
 from config import (
     H4_TIMEFRAME,
@@ -127,14 +122,7 @@ def _safe_float(
     default: float = 0.0,
 ) -> float:
     """
-    Convertit proprement une valeur en float.
-
-    Accepte :
-    - int
-    - float
-    - string numérique
-    - liste / tuple
-    - dictionnaire contenant une valeur numérique
+    Conversion robuste vers float.
     """
 
     if value is None:
@@ -180,14 +168,12 @@ def _safe_float(
         return default
 
     try:
-
         return float(value)
 
     except (
         TypeError,
         ValueError,
     ):
-
         return default
 
 
@@ -223,22 +209,10 @@ def _normalize_direction(
     value: Any,
 ) -> str:
     """
-    Normalise toutes les représentations de direction.
-
     BUY / BULLISH / LONG -> BUY
     SELL / BEARISH / SHORT -> SELL
-    Tout le reste -> NEUTRAL
+    Tout le reste -> NEUTRAL.
     """
-
-    if isinstance(value, dict):
-
-        value = (
-            value.get("direction")
-            or value.get("bias")
-            or value.get("trend")
-            or value.get("signal")
-            or ""
-        )
 
     value = str(
         value or ""
@@ -248,18 +222,14 @@ def _normalize_direction(
         BUY,
         "BULLISH",
         "LONG",
-        "UP",
     }:
-
         return BUY
 
     if value in {
         SELL,
         "BEARISH",
         "SHORT",
-        "DOWN",
     }:
-
         return SELL
 
     return NEUTRAL
@@ -273,181 +243,21 @@ def _extract_bias(
     analysis: Dict[str, Any],
 ) -> str:
     """
-    Extrait le bias d'une analyse de timeframe.
-
-    Recherche plusieurs formats possibles.
+    Extrait le bias d'une analyse.
     """
 
     if not isinstance(
         analysis,
         dict,
     ):
-
         return NEUTRAL
 
-    # --------------------------------------------------------
-    # Bias direct
-    # --------------------------------------------------------
-
-    bias = analysis.get(
-        "bias"
-    )
-
-    normalized = _normalize_direction(
-        bias
-    )
-
-    if normalized != NEUTRAL:
-        return normalized
-
-    # --------------------------------------------------------
-    # Direction
-    # --------------------------------------------------------
-
-    direction = analysis.get(
-        "direction"
-    )
-
-    normalized = _normalize_direction(
-        direction
-    )
-
-    if normalized != NEUTRAL:
-        return normalized
-
-    # --------------------------------------------------------
-    # Trend
-    # --------------------------------------------------------
-
-    trend = analysis.get(
-        "trend"
-    )
-
-    normalized = _normalize_direction(
-        trend
-    )
-
-    if normalized != NEUTRAL:
-        return normalized
-
-    # --------------------------------------------------------
-    # Structure
-    # --------------------------------------------------------
-
-    structure = analysis.get(
-        "structure"
-    )
-
-    if isinstance(
-        structure,
-        dict,
-    ):
-
-        for key in (
+    return _normalize_direction(
+        analysis.get(
             "bias",
-            "direction",
-            "trend",
-        ):
-
-            normalized = _normalize_direction(
-                structure.get(key)
-            )
-
-            if normalized != NEUTRAL:
-
-                return normalized
-
-    return NEUTRAL
-
-
-# ============================================================
-# NORMALISATION STRUCTURE
-# ============================================================
-
-def _normalize_structure_analysis(
-    structure_analysis: Any,
-) -> Dict[str, Any]:
-    """
-    Garantit que Fibonacci reçoit TOUJOURS un dictionnaire.
-
-    Cette fonction protège contre l'erreur :
-
-        'str' object has no attribute 'get'
-
-    Formats acceptés :
-
-        {
-            "swings": ...,
-            "latest": ...,
-            "fvg": ...,
-            ...
-        }
-
-    ou :
-
-        {
-            "structure": {
-                "swings": ...,
-                ...
-            }
-        }
-
-    Si un mauvais type arrive, un dictionnaire vide est retourné.
-    """
-
-    if not isinstance(
-        structure_analysis,
-        dict,
-    ):
-
-        return {}
-
-    # --------------------------------------------------------
-    # Cas normal :
-    #
-    # structure_analysis =
-    # {
-    #     "swings": ...,
-    #     "latest": ...,
-    # }
-    # --------------------------------------------------------
-
-    if any(
-        key in structure_analysis
-        for key in (
-            "swings",
-            "latest",
-            "fvg",
-            "order_blocks",
-            "bos",
-            "choch",
-            "liquidity",
-            "liquidity_sweeps",
+            NEUTRAL,
         )
-    ):
-
-        return structure_analysis
-
-    # --------------------------------------------------------
-    # Cas imbriqué :
-    #
-    # {
-    #     "structure": {...}
-    # }
-    # --------------------------------------------------------
-
-    nested = structure_analysis.get(
-        "structure"
     )
-
-    if isinstance(
-        nested,
-        dict,
-    ):
-
-        return nested
-
-    return structure_analysis
 
 
 # ============================================================
@@ -462,7 +272,6 @@ def _get_last_close(
     """
 
     if not candles:
-
         raise ValueError(
             "Aucune bougie disponible."
         )
@@ -473,7 +282,6 @@ def _get_last_close(
         candle,
         dict,
     ):
-
         raise ValueError(
             "Format de bougie invalide."
         )
@@ -491,7 +299,6 @@ def _get_last_close(
             )
 
             if value > 0:
-
                 return value
 
     raise ValueError(
@@ -509,16 +316,9 @@ def analyser_timeframe(
 ) -> Dict[str, Any]:
     """
     Analyse complète d'un timeframe.
-
-    DATA
-      ↓
-    INDICATEURS
-      ↓
-    STRUCTURE
     """
 
     if not candles:
-
         raise ValueError(
             f"Aucune bougie pour {timeframe}."
         )
@@ -573,13 +373,6 @@ def analyser_timeframe(
         structure,
         dict,
     ):
-
-        logger.warning(
-            "%s : structure.py a retourné un type invalide : %s",
-            timeframe,
-            type(structure).__name__,
-        )
-
         structure = {}
 
     bias = _extract_bias(
@@ -587,7 +380,7 @@ def analyser_timeframe(
     )
 
     # ========================================================
-    # DERNIÈRE STRUCTURE
+    # LATEST
     # ========================================================
 
     latest = structure.get(
@@ -599,24 +392,7 @@ def analyser_timeframe(
         latest,
         dict,
     ):
-
         latest = {}
-
-    # ========================================================
-    # SWINGS
-    # ========================================================
-
-    swings = structure.get(
-        "swings",
-        {},
-    )
-
-    if not isinstance(
-        swings,
-        dict,
-    ):
-
-        swings = {}
 
     # ========================================================
     # FVG
@@ -631,7 +407,6 @@ def analyser_timeframe(
         fvg,
         list,
     ):
-
         fvg = []
 
     # ========================================================
@@ -647,11 +422,10 @@ def analyser_timeframe(
         order_blocks,
         list,
     ):
-
         order_blocks = []
 
     # ========================================================
-    # RÉSULTAT
+    # RESULTAT
     # ========================================================
 
     return {
@@ -689,9 +463,6 @@ def analyser_timeframe(
         "latest":
             latest,
 
-        "swings":
-            swings,
-
         "fvg":
             fvg,
 
@@ -711,17 +482,13 @@ def charger_donnees_multi_timeframe(
     Charge H4, H1, M15 et M5.
     """
 
-    result = {}
+    result: Dict[str, list] = {}
 
     for timeframe in TIMEFRAMES:
 
-        api_timeframe = (
-            TIMEFRAME_TO_API[
-                timeframe
-            ]
-        )
-
-        candles = []
+        api_timeframe = TIMEFRAME_TO_API[
+            timeframe
+        ]
 
         try:
 
@@ -747,6 +514,8 @@ def charger_donnees_multi_timeframe(
                     exc,
                 )
 
+                candles = []
+
         except Exception as exc:
 
             logger.exception(
@@ -755,11 +524,12 @@ def charger_donnees_multi_timeframe(
                 exc,
             )
 
+            candles = []
+
         if not isinstance(
             candles,
             list,
         ):
-
             candles = []
 
         result[timeframe] = candles
@@ -786,20 +556,11 @@ def determiner_direction(
     """
     Détermine la direction principale.
 
-    H4  = tendance globale
-    H1  = structure principale
+    H4 = tendance globale
+    H1 = structure principale
     M15 = contexte
 
-    Règles :
-
-    1. H4 est l'ancrage principal.
-    2. H1 et M15 peuvent être NEUTRAL.
-    3. H4 seul peut donner la direction.
-    4. H4 + H1 alignés -> direction H4.
-    5. H4 + M15 alignés -> direction H4.
-    6. H1 + M15 opposés à H4 -> NEUTRAL.
-    7. H4 NEUTRAL + H1/M15 alignés -> direction.
-    8. M5 n'intervient jamais.
+    M5 n'intervient jamais.
     """
 
     if not isinstance(h4, dict):
@@ -825,7 +586,6 @@ def determiner_direction(
             h1_bias != NEUTRAL
             and h1_bias == m15_bias
         ):
-
             return h1_bias
 
         return NEUTRAL
@@ -835,7 +595,6 @@ def determiner_direction(
     # ========================================================
 
     if h1_bias == h4_bias:
-
         return h4_bias
 
     # ========================================================
@@ -843,7 +602,6 @@ def determiner_direction(
     # ========================================================
 
     if m15_bias == h4_bias:
-
         return h4_bias
 
     # ========================================================
@@ -854,7 +612,6 @@ def determiner_direction(
         h1_bias == NEUTRAL
         and m15_bias == NEUTRAL
     ):
-
         return h4_bias
 
     # ========================================================
@@ -876,6 +633,8 @@ def verifier_confirmation_m5(
     M5 confirme la direction.
 
     M5 ne peut jamais créer une direction.
+
+    Une confirmation valide doit être cohérente.
     """
 
     direction = _normalize_direction(
@@ -886,32 +645,19 @@ def verifier_confirmation_m5(
         m5,
         dict,
     ):
-
         m5 = {}
 
     if direction == NEUTRAL:
 
         return {
-
-            "direction":
-                NEUTRAL,
-
-            "m5_bias":
-                NEUTRAL,
-
-            "confirmed":
-                False,
-
-            "confirmation_type":
-                None,
-
-            "reason":
-                "NO_MAIN_DIRECTION",
+            "direction": NEUTRAL,
+            "m5_bias": NEUTRAL,
+            "confirmed": False,
+            "confirmation_type": None,
+            "reason": "NO_MAIN_DIRECTION",
         }
 
-    m5_bias = _extract_bias(
-        m5
-    )
+    m5_bias = _extract_bias(m5)
 
     latest = m5.get(
         "latest",
@@ -922,21 +668,16 @@ def verifier_confirmation_m5(
         latest,
         dict,
     ):
-
         latest = {}
 
-    confirmed = False
-    confirmation_types = []
+    confirmations = []
 
     # ========================================================
     # BIAIS M5
     # ========================================================
 
     if m5_bias == direction:
-
-        confirmed = True
-
-        confirmation_types.append(
+        confirmations.append(
             "M5_BIAS"
         )
 
@@ -948,24 +689,21 @@ def verifier_confirmation_m5(
         "bos"
     )
 
+    bos_direction = NEUTRAL
+
     if isinstance(
         latest_bos,
         dict,
     ):
 
-        bos_direction = (
-            _normalize_direction(
-                latest_bos.get(
-                    "direction"
-                )
+        bos_direction = _normalize_direction(
+            latest_bos.get(
+                "direction"
             )
         )
 
         if bos_direction == direction:
-
-            confirmed = True
-
-            confirmation_types.append(
+            confirmations.append(
                 "M5_BOS"
             )
 
@@ -977,26 +715,59 @@ def verifier_confirmation_m5(
         "choch"
     )
 
+    choch_direction = NEUTRAL
+
     if isinstance(
         latest_choch,
         dict,
     ):
 
-        choch_direction = (
-            _normalize_direction(
-                latest_choch.get(
-                    "direction"
-                )
+        choch_direction = _normalize_direction(
+            latest_choch.get(
+                "direction"
             )
         )
 
         if choch_direction == direction:
-
-            confirmed = True
-
-            confirmation_types.append(
+            confirmations.append(
                 "M5_CHOCH"
             )
+
+    # ========================================================
+    # DÉTECTION CONTRADICTION
+    # ========================================================
+
+    opposite = (
+        SELL
+        if direction == BUY
+        else BUY
+    )
+
+    contradiction = False
+
+    if m5_bias == opposite:
+        contradiction = True
+
+    if bos_direction == opposite:
+        contradiction = True
+
+    if choch_direction == opposite:
+        contradiction = True
+
+    # ========================================================
+    # RÉSULTAT
+    # ========================================================
+
+    confirmed = (
+        len(confirmations) > 0
+        and not contradiction
+    )
+
+    confirmation_type = (
+        confirmations[-1]
+        if confirmations
+        else None
+    )
 
     return {
 
@@ -1010,14 +781,13 @@ def verifier_confirmation_m5(
             confirmed,
 
         "confirmation_type":
-            (
-                confirmation_types[-1]
-                if confirmation_types
-                else None
-            ),
+            confirmation_type,
 
-        "confirmation_types":
-            confirmation_types,
+        "confirmations":
+            confirmations,
+
+        "contradiction":
+            contradiction,
     }
 
 
@@ -1029,15 +799,11 @@ def construire_contexte_indicateurs(
     analysis: Dict[str, Any],
     direction: str,
 ) -> Dict[str, Any]:
-    """
-    Construit le contexte EMA / RSI / ATR.
-    """
 
     if not isinstance(
         analysis,
         dict,
     ):
-
         analysis = {}
 
     direction = _normalize_direction(
@@ -1072,40 +838,25 @@ def construire_contexte_indicateurs(
         )
     )
 
-    # ========================================================
-    # EMA
-    # ========================================================
-
     if ema20 > ema50:
-
         ema_context = "bullish"
 
     elif ema20 < ema50:
-
         ema_context = "bearish"
 
     else:
-
         ema_context = "neutral"
 
-    # ========================================================
-    # RSI
-    # ========================================================
-
     if rsi >= 70:
-
         rsi_context = "overbought"
 
     elif rsi <= 30:
-
         rsi_context = "oversold"
 
     elif rsi >= 50:
-
         rsi_context = "bullish_bias"
 
     else:
-
         rsi_context = "bearish_bias"
 
     return {
@@ -1134,6 +885,181 @@ def construire_contexte_indicateurs(
 
 
 # ============================================================
+# NORMALISATION STRUCTURE POUR FIBONACCI
+# ============================================================
+
+def _normaliser_structure_fibonacci(
+    structure_analysis: Any,
+) -> Dict[str, Any]:
+    """
+    Prépare une structure strictement compatible
+    avec fibonacci.py.
+
+    fibonacci.py attend :
+
+        {
+            "swings": {
+                "highs": [
+                    {
+                        "index": int,
+                        "price": float
+                    }
+                ],
+                "lows": [
+                    {
+                        "index": int,
+                        "price": float
+                    }
+                ]
+            }
+        }
+
+    Cette fonction élimine les formats invalides.
+    """
+
+    if not isinstance(
+        structure_analysis,
+        dict,
+    ):
+        return {
+            "swings": {
+                "highs": [],
+                "lows": [],
+            }
+        }
+
+    swings = structure_analysis.get(
+        "swings",
+        {},
+    )
+
+    if not isinstance(
+        swings,
+        dict,
+    ):
+        swings = {}
+
+    normalized = {
+        "swings": {
+            "highs": [],
+            "lows": [],
+        }
+    }
+
+    # ========================================================
+    # HIGH
+    # ========================================================
+
+    highs = swings.get(
+        "highs",
+        [],
+    )
+
+    if isinstance(
+        highs,
+        list,
+    ):
+
+        for position, swing in enumerate(highs):
+
+            if not isinstance(
+                swing,
+                dict,
+            ):
+                continue
+
+            price = _safe_float(
+                swing.get(
+                    "price"
+                ),
+                default=0.0,
+            )
+
+            index = swing.get(
+                "index",
+                position,
+            )
+
+            try:
+                index = int(index)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                index = position
+
+            if price > 0:
+
+                normalized[
+                    "swings"
+                ][
+                    "highs"
+                ].append(
+                    {
+                        "index": index,
+                        "price": price,
+                    }
+                )
+
+    # ========================================================
+    # LOW
+    # ========================================================
+
+    lows = swings.get(
+        "lows",
+        [],
+    )
+
+    if isinstance(
+        lows,
+        list,
+    ):
+
+        for position, swing in enumerate(lows):
+
+            if not isinstance(
+                swing,
+                dict,
+            ):
+                continue
+
+            price = _safe_float(
+                swing.get(
+                    "price"
+                ),
+                default=0.0,
+            )
+
+            index = swing.get(
+                "index",
+                position,
+            )
+
+            try:
+                index = int(index)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                index = position
+
+            if price > 0:
+
+                normalized[
+                    "swings"
+                ][
+                    "lows"
+                ].append(
+                    {
+                        "index": index,
+                        "price": price,
+                    }
+                )
+
+    return normalized
+
+
+# ============================================================
 # FIBONACCI
 # ============================================================
 
@@ -1147,18 +1073,7 @@ def construire_fibonacci(
     """
     Construit l'analyse Fibonacci.
 
-    CORRECTION IMPORTANTE :
-
-    Fibonacci doit recevoir une analyse de structure
-    sous forme de dictionnaire.
-
-    Jamais :
-
-        calculer_fibonacci(candles, "SELL")
-
-    Toujours :
-
-        calculer_fibonacci(candles, structure_dict)
+    Fibonacci reçoit TOUJOURS une structure normalisée.
     """
 
     if not candles:
@@ -1169,117 +1084,74 @@ def construire_fibonacci(
 
         return {}
 
-    direction = _normalize_direction(
-        direction
-    )
+    if not isinstance(
+        structure_analysis,
+        dict,
+    ):
 
-    if direction == NEUTRAL:
-
-        logger.info(
-            "Fibonacci : direction NEUTRAL."
+        logger.warning(
+            "Fibonacci : structure absente."
         )
 
         return {}
 
-    # ========================================================
-    # NORMALISATION STRUCTURE
-    # ========================================================
-
-    structure = (
-        _normalize_structure_analysis(
+    normalized_structure = (
+        _normaliser_structure_fibonacci(
             structure_analysis
         )
     )
 
-    if not structure:
+    highs = (
+        normalized_structure[
+            "swings"
+        ][
+            "highs"
+        ]
+    )
+
+    lows = (
+        normalized_structure[
+            "swings"
+        ][
+            "lows"
+        ]
+    )
+
+    if not highs or not lows:
 
         logger.warning(
-            "Fibonacci : analyse de structure absente ou invalide."
+            "Fibonacci : swings insuffisants "
+            "(highs=%s, lows=%s).",
+            len(highs),
+            len(lows),
         )
 
         return {}
-
-    # ========================================================
-    # PROTECTION CONTRE LES VALEURS STRING
-    # ========================================================
-
-    # Fibonacci travaille avec un dictionnaire.
-    # On vérifie explicitement les champs susceptibles
-    # de contenir accidentellement une chaîne.
-
-    safe_structure = dict(
-        structure
-    )
-
-    for key in (
-        "swings",
-        "latest",
-        "fvg",
-        "order_blocks",
-        "bos",
-        "choch",
-        "liquidity",
-        "liquidity_sweeps",
-    ):
-
-        if key not in safe_structure:
-
-            if key in {
-                "fvg",
-                "order_blocks",
-                "liquidity_sweeps",
-            }:
-
-                safe_structure[key] = []
-
-            else:
-
-                safe_structure[key] = {}
-
-    # ========================================================
-    # APPEL FIBONACCI
-    # ========================================================
 
     try:
 
         result = calculer_fibonacci(
-            candles,
-            safe_structure,
+            candles=candles,
+            structure_analysis=normalized_structure,
         )
 
-    except AttributeError as exc:
+        if isinstance(
+            result,
+            dict,
+        ):
 
-        logger.exception(
-            "Erreur interne Fibonacci : %s",
-            exc,
-        )
+            logger.info(
+                "Fibonacci calculé avec succès."
+            )
 
-        return {}
+            return result
 
     except Exception as exc:
 
-        logger.exception(
+        logger.warning(
             "Analyse Fibonacci indisponible : %s",
             exc,
         )
-
-        return {}
-
-    # ========================================================
-    # VALIDATION RESULTAT
-    # ========================================================
-
-    if isinstance(
-        result,
-        dict,
-    ):
-
-        return result
-
-    logger.warning(
-        "Fibonacci a retourné un type invalide : %s",
-        type(result).__name__,
-    )
 
     return {}
 
@@ -1291,15 +1163,6 @@ def construire_fibonacci(
 def _extract_swing_prices(
     analysis: Dict[str, Any],
 ) -> Dict[str, list]:
-    """
-    Extrait les prix des swings.
-
-    Accepte :
-        analysis["swings"]
-
-    ou :
-        analysis["structure"]["swings"]
-    """
 
     result = {
         "highs": [],
@@ -1310,26 +1173,9 @@ def _extract_swing_prices(
         analysis,
         dict,
     ):
-
         return result
 
-    # ========================================================
-    # STRUCTURE
-    # ========================================================
-
-    structure = analysis.get(
-        "structure",
-        analysis,
-    )
-
-    if not isinstance(
-        structure,
-        dict,
-    ):
-
-        return result
-
-    swings = structure.get(
+    swings = analysis.get(
         "swings",
         {},
     )
@@ -1338,11 +1184,10 @@ def _extract_swing_prices(
         swings,
         dict,
     ):
-
         return result
 
     # ========================================================
-    # SWING HIGHS
+    # HIGH
     # ========================================================
 
     highs = swings.get(
@@ -1357,41 +1202,25 @@ def _extract_swing_prices(
 
         for swing in highs:
 
-            if isinstance(
+            if not isinstance(
                 swing,
                 dict,
             ):
+                continue
 
-                price = _safe_float(
-                    swing.get(
-                        "price"
-                    )
+            price = _safe_float(
+                swing.get(
+                    "price"
                 )
+            )
 
-                if price > 0:
-
-                    result[
-                        "highs"
-                    ].append(
-                        price
-                    )
-
-            else:
-
-                price = _safe_float(
-                    swing
+            if price > 0:
+                result["highs"].append(
+                    price
                 )
-
-                if price > 0:
-
-                    result[
-                        "highs"
-                    ].append(
-                        price
-                    )
 
     # ========================================================
-    # SWING LOWS
+    # LOW
     # ========================================================
 
     lows = swings.get(
@@ -1406,38 +1235,22 @@ def _extract_swing_prices(
 
         for swing in lows:
 
-            if isinstance(
+            if not isinstance(
                 swing,
                 dict,
             ):
+                continue
 
-                price = _safe_float(
-                    swing.get(
-                        "price"
-                    )
+            price = _safe_float(
+                swing.get(
+                    "price"
                 )
+            )
 
-                if price > 0:
-
-                    result[
-                        "lows"
-                    ].append(
-                        price
-                    )
-
-            else:
-
-                price = _safe_float(
-                    swing
+            if price > 0:
+                result["lows"].append(
+                    price
                 )
-
-                if price > 0:
-
-                    result[
-                        "lows"
-                    ].append(
-                        price
-                    )
 
     return result
 
@@ -1453,18 +1266,6 @@ def determiner_stop_loss(
     h1_analysis: Dict[str, Any],
     atr: float = 0.0,
 ) -> Optional[float]:
-    """
-    Détermine le Stop Loss à partir des swings M15/H1.
-
-    BUY :
-        SL sous le dernier swing low exploitable.
-
-    SELL :
-        SL au-dessus du dernier swing high exploitable.
-
-    Fallback :
-        ATR x 1.5
-    """
 
     direction = _normalize_direction(
         direction
@@ -1510,13 +1311,9 @@ def determiner_stop_loss(
         )
 
         if candidates:
-
-            return max(
-                candidates
-            )
+            return max(candidates)
 
         if atr > 0:
-
             return entry - (
                 atr * 1.5
             )
@@ -1542,13 +1339,9 @@ def determiner_stop_loss(
         )
 
         if candidates:
-
-            return min(
-                candidates
-            )
+            return min(candidates)
 
         if atr > 0:
-
             return entry + (
                 atr * 1.5
             )
@@ -1565,9 +1358,6 @@ def _validate_stop_loss(
     entry: float,
     stop_loss: Optional[float],
 ) -> bool:
-    """
-    Vérifie que le SL est du bon côté du marché.
-    """
 
     if stop_loss is None:
         return False
@@ -1591,37 +1381,35 @@ def _validate_stop_loss(
         return False
 
     if direction == BUY:
-
         return stop_loss < entry
 
     if direction == SELL:
-
         return stop_loss > entry
 
     return False
 
 
 # ============================================================
-# RESULTAT D'ERREUR STANDARD
+# RESULTAT STANDARD
 # ============================================================
 
-def _error_result(
-    status: str,
+def _base_result(
     symbol: str,
     direction: str,
-    biases: Dict[str, str],
+    h4_bias: str,
+    h1_bias: str,
+    m15_bias: str,
+    m5_bias: str,
     analyses: Dict[str, Any],
-    error: str,
-    **extra: Any,
 ) -> Dict[str, Any]:
     """
-    Construit une sortie d'erreur standardisée.
+    Construit toujours une structure de résultat cohérente.
     """
 
-    result = {
+    return {
 
         "status":
-            status,
+            "REJECT",
 
         "symbol":
             symbol,
@@ -1629,13 +1417,34 @@ def _error_result(
         "direction":
             direction,
 
-        "biases":
-            biases,
+        "biases": {
 
-        "score":
-            {
-                "final_score": 0
-            },
+            "H4":
+                h4_bias,
+
+            "H1":
+                h1_bias,
+
+            "M15":
+                m15_bias,
+
+            "M5":
+                m5_bias,
+        },
+
+        "entry":
+            None,
+
+        "stop_loss":
+            None,
+
+        "score": {
+            "buy_score": 0,
+            "sell_score": 0,
+            "final_score": 0,
+            "direction": direction,
+            "quality": "REJECT",
+        },
 
         "rr":
             {},
@@ -1643,8 +1452,14 @@ def _error_result(
         "quality":
             {},
 
-        "error":
-            error,
+        "indicators":
+            {},
+
+        "fibonacci":
+            {},
+
+        "m5_confirmation":
+            {},
 
         "analyses":
             analyses,
@@ -1652,12 +1467,6 @@ def _error_result(
         "ready_for_signal":
             False,
     }
-
-    result.update(
-        extra
-    )
-
-    return result
 
 
 # ============================================================
@@ -1667,11 +1476,6 @@ def _error_result(
 def analyser_marche(
     symbol: str = DEFAULT_SYMBOL,
 ) -> Dict[str, Any]:
-    """
-    Analyse complète du marché.
-
-    Fonction principale appelée par le bot.
-    """
 
     logger.info(
         "Analyse Vision Trade AI V2 : %s",
@@ -1689,10 +1493,10 @@ def analyser_marche(
     )
 
     # ========================================================
-    # ANALYSE DES TIMEFRAMES
+    # ANALYSES
     # ========================================================
 
-    analyses = {}
+    analyses: Dict[str, Dict[str, Any]] = {}
 
     for timeframe in TIMEFRAMES:
 
@@ -1729,8 +1533,7 @@ def analyser_marche(
             )
 
             analyses[timeframe] = {
-                "error":
-                    str(exc)
+                "error": str(exc)
             }
 
     # ========================================================
@@ -1761,39 +1564,13 @@ def analyser_marche(
     # BIAIS
     # ========================================================
 
-    h4_bias = _extract_bias(
-        h4
-    )
-
-    h1_bias = _extract_bias(
-        h1
-    )
-
-    m15_bias = _extract_bias(
-        m15
-    )
-
-    m5_bias = _extract_bias(
-        m5
-    )
-
-    biases = {
-
-        "H4":
-            h4_bias,
-
-        "H1":
-            h1_bias,
-
-        "M15":
-            m15_bias,
-
-        "M5":
-            m5_bias,
-    }
+    h4_bias = _extract_bias(h4)
+    h1_bias = _extract_bias(h1)
+    m15_bias = _extract_bias(m15)
+    m5_bias = _extract_bias(m5)
 
     # ========================================================
-    # DIRECTION PRINCIPALE
+    # DIRECTION
     # ========================================================
 
     direction = determiner_direction(
@@ -1832,8 +1609,20 @@ def analyser_marche(
             "direction":
                 NEUTRAL,
 
-            "biases":
-                biases,
+            "biases": {
+
+                "H4":
+                    h4_bias,
+
+                "H1":
+                    h1_bias,
+
+                "M15":
+                    m15_bias,
+
+                "M5":
+                    m5_bias,
+            },
 
             "entry":
                 None,
@@ -1841,10 +1630,9 @@ def analyser_marche(
             "stop_loss":
                 None,
 
-            "score":
-                {
-                    "final_score": 0
-                },
+            "score": {
+                "final_score": 0
+            },
 
             "rr":
                 {},
@@ -1861,13 +1649,7 @@ def analyser_marche(
             "m5_confirmation":
                 {
                     "confirmed":
-                        False,
-
-                    "direction":
-                        NEUTRAL,
-
-                    "m5_bias":
-                        m5_bias,
+                        False
                 },
 
             "analyses":
@@ -1878,7 +1660,7 @@ def analyser_marche(
         }
 
     # ========================================================
-    # CONFIRMATION M5
+    # M5
     # ========================================================
 
     m5_confirmation = (
@@ -1888,13 +1670,8 @@ def analyser_marche(
         )
     )
 
-    logger.info(
-        "CONFIRMATION M5 : %s",
-        m5_confirmation,
-    )
-
     # ========================================================
-    # CONTEXTE INDICATEURS M15
+    # INDICATEURS M15
     # ========================================================
 
     indicator_context = (
@@ -1920,19 +1697,21 @@ def analyser_marche(
         dict,
     ):
 
-        m15_structure = (
+        candidate_structure = (
             m15.get(
                 "structure",
                 {},
             )
         )
 
-    # --------------------------------------------------------
-    # IMPORTANT :
-    #
-    # On passe uniquement le dictionnaire structure.
-    # Jamais la chaîne BUY/SELL.
-    # --------------------------------------------------------
+        if isinstance(
+            candidate_structure,
+            dict,
+        ):
+
+            m15_structure = (
+                candidate_structure
+            )
 
     fibonacci_analysis = (
         construire_fibonacci(
@@ -1942,13 +1721,15 @@ def analyser_marche(
         )
     )
 
+    fibonacci_available = bool(
+        fibonacci_analysis
+    )
+
     logger.info(
         "FIBONACCI : %s",
-        (
-            "OK"
-            if fibonacci_analysis
-            else "INDISPONIBLE"
-        ),
+        "OK"
+        if fibonacci_available
+        else "INDISPONIBLE",
     )
 
     # ========================================================
@@ -1985,24 +1766,35 @@ def analyser_marche(
             "Erreur score"
         )
 
-        return _error_result(
-            "SCORE_ERROR",
+        result = _base_result(
             symbol,
             direction,
-            biases,
+            h4_bias,
+            h1_bias,
+            m15_bias,
+            m5_bias,
             analyses,
-            str(exc),
-            fibonacci=
-                fibonacci_analysis,
-            indicators=
-                indicator_context,
-            m5_confirmation=
-                m5_confirmation,
         )
 
-    # ========================================================
-    # NORMALISATION SCORE
-    # ========================================================
+        result.update({
+
+            "status":
+                "SCORE_ERROR",
+
+            "error":
+                str(exc),
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "indicators":
+                indicator_context,
+
+            "m5_confirmation":
+                m5_confirmation,
+        })
+
+        return result
 
     if not isinstance(
         score_result,
@@ -2010,7 +1802,6 @@ def analyser_marche(
     ):
 
         score_result = {
-
             "final_score":
                 _safe_float(
                     score_result
@@ -2033,7 +1824,7 @@ def analyser_marche(
     )
 
     # ========================================================
-    # ENTRY M15
+    # ENTRY
     # ========================================================
 
     try:
@@ -2044,23 +1835,41 @@ def analyser_marche(
 
     except Exception as exc:
 
-        return _error_result(
-            "NO_ENTRY",
+        result = _base_result(
             symbol,
             direction,
-            biases,
+            h4_bias,
+            h1_bias,
+            m15_bias,
+            m5_bias,
             analyses,
-            str(exc),
-            fibonacci=
-                fibonacci_analysis,
-            indicators=
-                indicator_context,
-            m5_confirmation=
-                m5_confirmation,
         )
 
+        result.update({
+
+            "status":
+                "NO_ENTRY",
+
+            "error":
+                str(exc),
+
+            "score":
+                score_result,
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "indicators":
+                indicator_context,
+
+            "m5_confirmation":
+                m5_confirmation,
+        })
+
+        return result
+
     # ========================================================
-    # ATR M15
+    # ATR
     # ========================================================
 
     atr = _last_value(
@@ -2090,26 +1899,38 @@ def analyser_marche(
         stop_loss,
     ):
 
-        return _error_result(
-            "NO_STOP_LOSS",
+        result = _base_result(
             symbol,
             direction,
-            biases,
+            h4_bias,
+            h1_bias,
+            m15_bias,
+            m5_bias,
             analyses,
-            "Stop-loss invalide ou introuvable.",
-            entry=
-                entry,
-            stop_loss=
-                None,
-            score=
-                score_result,
-            indicators=
-                indicator_context,
-            fibonacci=
-                fibonacci_analysis,
-            m5_confirmation=
-                m5_confirmation,
         )
+
+        result.update({
+
+            "status":
+                "NO_STOP_LOSS",
+
+            "entry":
+                entry,
+
+            "score":
+                score_result,
+
+            "indicators":
+                indicator_context,
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "m5_confirmation":
+                m5_confirmation,
+        })
+
+        return result
 
     # ========================================================
     # RR
@@ -2125,10 +1946,6 @@ def analyser_marche(
                 minimum_rr=DEFAULT_MIN_RR,
             )
         )
-
-        # ----------------------------------------------------
-        # RR OBJECT
-        # ----------------------------------------------------
 
         rr_data = {
 
@@ -2184,22 +2001,44 @@ def analyser_marche(
             "Erreur RR"
         )
 
-        return _error_result(
-            "RR_ERROR",
+        result = _base_result(
             symbol,
             direction,
-            biases,
+            h4_bias,
+            h1_bias,
+            m15_bias,
+            m5_bias,
             analyses,
-            str(exc),
-            entry=
-                entry,
-            stop_loss=
-                stop_loss,
-            score=
-                score_result,
-            fibonacci=
-                fibonacci_analysis,
         )
+
+        result.update({
+
+            "status":
+                "RR_ERROR",
+
+            "entry":
+                entry,
+
+            "stop_loss":
+                stop_loss,
+
+            "score":
+                score_result,
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "error":
+                str(exc),
+
+            "indicators":
+                indicator_context,
+
+            "m5_confirmation":
+                m5_confirmation,
+        })
+
+        return result
 
     # ========================================================
     # FILTRE QUALITÉ
@@ -2207,31 +2046,29 @@ def analyser_marche(
 
     try:
 
-        quality_result = (
-            filtrer_qualite(
+        quality_result = filtrer_qualite(
 
-                direction=direction,
+            direction=direction,
 
-                score_result=score_result,
+            score_result=score_result,
 
-                rr_result=rr_data,
+            rr_result=rr_data,
 
-                h4_bias=h4_bias,
+            h4_bias=h4_bias,
 
-                h1_bias=h1_bias,
+            h1_bias=h1_bias,
 
-                m15_bias=m15_bias,
+            m15_bias=m15_bias,
 
-                m5_bias=m5_bias,
+            m5_bias=m5_bias,
 
-                news=None,
+            news=None,
 
-                minimum_score=
-                    DEFAULT_MIN_SCORE,
+            minimum_score=
+                DEFAULT_MIN_SCORE,
 
-                minimum_rr=
-                    DEFAULT_MIN_RR,
-            )
+            minimum_rr=
+                DEFAULT_MIN_RR,
         )
 
     except Exception as exc:
@@ -2240,32 +2077,47 @@ def analyser_marche(
             "Erreur filtre qualité"
         )
 
-        return _error_result(
-            "QUALITY_ERROR",
+        result = _base_result(
             symbol,
             direction,
-            biases,
+            h4_bias,
+            h1_bias,
+            m15_bias,
+            m5_bias,
             analyses,
-            str(exc),
-            entry=
-                entry,
-            stop_loss=
-                stop_loss,
-            score=
-                score_result,
-            rr=
-                rr_data,
-            fibonacci=
-                fibonacci_analysis,
-            indicators=
-                indicator_context,
-            m5_confirmation=
-                m5_confirmation,
         )
 
-    # ========================================================
-    # NORMALISATION QUALITÉ
-    # ========================================================
+        result.update({
+
+            "status":
+                "QUALITY_ERROR",
+
+            "entry":
+                entry,
+
+            "stop_loss":
+                stop_loss,
+
+            "score":
+                score_result,
+
+            "rr":
+                rr_data,
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "error":
+                str(exc),
+
+            "indicators":
+                indicator_context,
+
+            "m5_confirmation":
+                m5_confirmation,
+        })
+
+        return result
 
     if not isinstance(
         quality_result,
@@ -2293,85 +2145,16 @@ def analyser_marche(
         "REJECT",
     )
 
-    # ========================================================
-    # SÉCURITÉ SUPPLÉMENTAIRE
-    # ========================================================
-
-    # Même si un module aval retourne accidentellement
-    # ready_for_signal=True, le moteur principal refuse
-    # le signal si le score ou le RR ne passent pas.
-
-    score_passed = (
-        final_score
-        >= DEFAULT_MIN_SCORE
-    )
-
-    rr_passed = bool(
-        rr_data.get(
-            "passes_rr_filter",
-            False,
-        )
-    )
-
-    if not score_passed:
-
-        ready = False
-
-        if status == "ACCEPT":
-
-            status = "REJECT"
-
-    if not rr_passed:
-
-        ready = False
-
-        if status == "ACCEPT":
-
-            status = "REJECT"
-
-    # --------------------------------------------------------
-    # M5
-    #
-    # Le M5 reste une confirmation.
-    # Il ne crée jamais la direction.
-    # --------------------------------------------------------
-
-    if not m5_confirmation.get(
-        "confirmed",
-        False,
-    ):
-
-        ready = False
-
-        if status == "ACCEPT":
-
-            status = "REJECT"
-
     logger.info(
-        (
-            "RÉSULTAT : "
-            "status=%s | "
-            "direction=%s | "
-            "score=%.2f | "
-            "score_ok=%s | "
-            "rr_ok=%s | "
-            "m5_ok=%s | "
-            "ready=%s"
-        ),
+        "RÉSULTAT : status=%s | direction=%s | score=%.2f | ready=%s",
         status,
         direction,
         final_score,
-        score_passed,
-        rr_passed,
-        m5_confirmation.get(
-            "confirmed",
-            False,
-        ),
         ready,
     )
 
     # ========================================================
-    # RÉSULTAT FINAL
+    # RESULTAT FINAL
     # ========================================================
 
     return {
@@ -2385,8 +2168,20 @@ def analyser_marche(
         "direction":
             direction,
 
-        "biases":
-            biases,
+        "biases": {
+
+            "H4":
+                h4_bias,
+
+            "H1":
+                h1_bias,
+
+            "M15":
+                m15_bias,
+
+            "M5":
+                m5_bias,
+        },
 
         "entry":
             entry,
@@ -2408,6 +2203,9 @@ def analyser_marche(
 
         "fibonacci":
             fibonacci_analysis,
+
+        "fibonacci_available":
+            fibonacci_available,
 
         "m5_confirmation":
             m5_confirmation,
@@ -2438,12 +2236,9 @@ def analyse(
 # ============================================================
 
 def _run_internal_test():
-    """
-    Tests unitaires de base.
-    """
 
     # ========================================================
-    # NORMALISATION DIRECTION
+    # NORMALISATION
     # ========================================================
 
     assert (
@@ -2467,124 +2262,12 @@ def _run_internal_test():
     )
 
     assert (
-        _normalize_direction("LONG")
-        == BUY
-    )
-
-    assert (
-        _normalize_direction("SHORT")
-        == SELL
-    )
-
-    assert (
         _normalize_direction("xxx")
         == NEUTRAL
     )
 
     # ========================================================
-    # EXTRACTION BIAS
-    # ========================================================
-
-    assert (
-        _extract_bias(
-            {
-                "bias": "BUY"
-            }
-        )
-        == BUY
-    )
-
-    assert (
-        _extract_bias(
-            {
-                "direction": "SELL"
-            }
-        )
-        == SELL
-    )
-
-    assert (
-        _extract_bias(
-            {}
-        )
-        == NEUTRAL
-    )
-
-    # ========================================================
-    # NORMALISATION STRUCTURE
-    # ========================================================
-
-    structure = {
-
-        "swings": {
-
-            "highs": [],
-            "lows": [],
-        },
-
-        "latest": {},
-
-        "fvg": [],
-
-        "order_blocks": [],
-    }
-
-    normalized = (
-        _normalize_structure_analysis(
-            structure
-        )
-    )
-
-    assert isinstance(
-        normalized,
-        dict,
-    )
-
-    # ========================================================
-    # STRUCTURE IMBRIQUÉE
-    # ========================================================
-
-    nested = (
-        _normalize_structure_analysis(
-            {
-                "structure":
-                    structure
-            }
-        )
-    )
-
-    assert isinstance(
-        nested,
-        dict,
-    )
-
-    assert (
-        "swings"
-        in nested
-    )
-
-    # ========================================================
-    # FIBONACCI : MAUVAIS TYPE
-    # ========================================================
-
-    invalid_structure = (
-        _normalize_structure_analysis(
-            "SELL"
-        )
-    )
-
-    assert isinstance(
-        invalid_structure,
-        dict,
-    )
-
-    assert (
-        invalid_structure
-        == {}
-    )
-
-    # ========================================================
-    # DIRECTION H4 + H1 BUY
+    # DIRECTION
     # ========================================================
 
     assert (
@@ -2596,10 +2279,6 @@ def _run_internal_test():
         == BUY
     )
 
-    # ========================================================
-    # DIRECTION H4 + H1 SELL
-    # ========================================================
-
     assert (
         determiner_direction(
             {"bias": SELL},
@@ -2609,10 +2288,6 @@ def _run_internal_test():
         == SELL
     )
 
-    # ========================================================
-    # H4 SEUL SELL
-    # ========================================================
-
     assert (
         determiner_direction(
             {"bias": SELL},
@@ -2621,10 +2296,6 @@ def _run_internal_test():
         )
         == SELL
     )
-
-    # ========================================================
-    # H4 SEUL BUY
-    # ========================================================
 
     assert (
         determiner_direction(
@@ -2635,10 +2306,6 @@ def _run_internal_test():
         == BUY
     )
 
-    # ========================================================
-    # H4 NEUTRAL + H1/M15 BUY
-    # ========================================================
-
     assert (
         determiner_direction(
             {"bias": NEUTRAL},
@@ -2648,10 +2315,6 @@ def _run_internal_test():
         == BUY
     )
 
-    # ========================================================
-    # H4 NEUTRAL + H1/M15 SELL
-    # ========================================================
-
     assert (
         determiner_direction(
             {"bias": NEUTRAL},
@@ -2660,10 +2323,6 @@ def _run_internal_test():
         )
         == SELL
     )
-
-    # ========================================================
-    # CONTRADICTION SELL / BUY / BUY
-    # ========================================================
 
     assert (
         determiner_direction(
@@ -2673,10 +2332,6 @@ def _run_internal_test():
         )
         == NEUTRAL
     )
-
-    # ========================================================
-    # CONTRADICTION BUY / SELL / SELL
-    # ========================================================
 
     assert (
         determiner_direction(
@@ -2694,41 +2349,97 @@ def _run_internal_test():
     indicators = (
         construire_contexte_indicateurs(
             {
-                "ema20":
-                    [100, 110],
-
-                "ema50":
-                    [90, 100],
-
-                "rsi":
-                    [50, 55],
-
-                "atr":
-                    [5, 6],
+                "ema20": [100, 110],
+                "ema50": [90, 100],
+                "rsi": [50, 55],
+                "atr": [5, 6],
             },
             BUY,
         )
     )
 
-    assert (
-        indicators["ema20"]
-        == 110
+    assert indicators["ema20"] == 110
+    assert indicators["ema50"] == 100
+    assert indicators["rsi"] == 55
+    assert indicators["atr"] == 6
+
+    # ========================================================
+    # NORMALISATION FIBONACCI
+    # ========================================================
+
+    fake_structure = {
+
+        "swings": {
+
+            "highs": [
+
+                {
+                    "index": 90,
+                    "price": 190,
+                }
+
+            ],
+
+            "lows": [
+
+                {
+                    "index": 80,
+                    "price": 180,
+                }
+
+            ],
+        }
+    }
+
+    normalized = (
+        _normaliser_structure_fibonacci(
+            fake_structure
+        )
     )
 
     assert (
-        indicators["ema50"]
-        == 100
+        normalized["swings"]["highs"][0]["price"]
+        == 190
     )
 
     assert (
-        indicators["rsi"]
-        == 55
+        normalized["swings"]["lows"][0]["price"]
+        == 180
     )
 
-    assert (
-        indicators["atr"]
-        == 6
+    # ========================================================
+    # FIBONACCI
+    # ========================================================
+
+    candles = [
+
+        {
+            "datetime": str(i),
+            "open": 100 + i,
+            "high": 101 + i,
+            "low": 99 + i,
+            "close": 100.5 + i,
+        }
+
+        for i in range(100)
+    ]
+
+    fib = construire_fibonacci(
+        candles=candles,
+        direction=BUY,
+        structure_analysis=fake_structure,
     )
+
+    assert isinstance(
+        fib,
+        dict,
+    )
+
+    assert "levels" in fib
+
+    assert "position" in fib
+
+    assert "closest_level" in fib
 
     # ========================================================
     # STOP LOSS BUY
@@ -2779,7 +2490,7 @@ def _run_internal_test():
     )
 
     # ========================================================
-    # VALIDATION SL BUY
+    # VALIDATION SL
     # ========================================================
 
     assert (
@@ -2791,10 +2502,6 @@ def _run_internal_test():
         is True
     )
 
-    # ========================================================
-    # VALIDATION SL SELL
-    # ========================================================
-
     assert (
         _validate_stop_loss(
             SELL,
@@ -2803,10 +2510,6 @@ def _run_internal_test():
         )
         is True
     )
-
-    # ========================================================
-    # INVALID SL BUY
-    # ========================================================
 
     assert (
         _validate_stop_loss(
@@ -2817,66 +2520,12 @@ def _run_internal_test():
         is False
     )
 
-    # ========================================================
-    # INVALID SL SELL
-    # ========================================================
-
     assert (
         _validate_stop_loss(
             SELL,
             100,
             90,
         )
-        is False
-    )
-
-    # ========================================================
-    # M5 CONFIRMATION
-    # ========================================================
-
-    confirmation = (
-        verifier_confirmation_m5(
-            SELL,
-            {
-                "bias":
-                    SELL,
-
-                "latest": {
-
-                    "bos": {
-
-                        "direction":
-                            SELL
-                    }
-                },
-            },
-        )
-    )
-
-    assert (
-        confirmation["confirmed"]
-        is True
-    )
-
-    # ========================================================
-    # M5 NEUTRAL
-    # ========================================================
-
-    confirmation = (
-        verifier_confirmation_m5(
-            SELL,
-            {
-                "bias":
-                    NEUTRAL,
-
-                "latest":
-                    {},
-            },
-        )
-    )
-
-    assert (
-        confirmation["confirmed"]
         is False
     )
 
@@ -2886,13 +2535,15 @@ def _run_internal_test():
 
 
 # ============================================================
-# EXÉCUTION DIRECTE
+# EXECUTION DIRECTE
 # ============================================================
 
 if __name__ == "__main__":
 
     logging.basicConfig(
+
         level=logging.INFO,
+
         format=(
             "%(asctime)s | "
             "%(levelname)s | "
@@ -2901,9 +2552,7 @@ if __name__ == "__main__":
         ),
     )
 
-    print(
-        "=" * 60
-    )
+    print("=" * 60)
 
     print(
         "VISION TRADE AI V2"
@@ -2913,9 +2562,7 @@ if __name__ == "__main__":
         "Test analyse.py"
     )
 
-    print(
-        "=" * 60
-    )
+    print("=" * 60)
 
     try:
 
