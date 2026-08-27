@@ -2,26 +2,36 @@
 Vision Trade AI V2
 rr.py
 
-Moteur déterministe du Risk / Reward.
+MOTEUR DÉTERMINISTE DU RISK / REWARD
 
 Responsabilités :
+- validation Entry / SL ;
 - calcul du risque ;
-- calcul de la récompense ;
-- calcul du ratio RR ;
-- validation du SL ;
 - calcul des TP ;
-- vérification du RR minimum ;
+- calcul des récompenses ;
+- calcul des ratios RR ;
+- validation du RR minimum ;
+- qualification du setup ;
 - gestion BUY / SELL.
 
 IMPORTANT :
-Ce module ne prend aucune décision basée sur l'IA.
+- aucune IA ;
+- aucun appel API ;
+- aucune décision Telegram ;
+- aucun calcul de taille de position ;
+- aucun calcul de risque monétaire ;
+- aucune dépendance externe.
+
+Le moteur est purement mathématique,
+déterministe et reproductible.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -36,21 +46,23 @@ SELL = "SELL"
 
 DEFAULT_MIN_RR = 2.0
 
-DEFAULT_TP_LEVELS = (
+DEFAULT_TP_LEVELS: Tuple[float, float, float] = (
     1.0,
     2.0,
     3.0,
 )
 
+MIN_PRICE = 0.0
+
 
 # ============================================================
-# MODÈLE
+# MODÈLE DE RÉSULTAT
 # ============================================================
 
 @dataclass
 class RRResult:
     """
-    Résultat complet du calcul Risk / Reward.
+    Résultat complet du moteur Risk / Reward.
     """
 
     direction: str
@@ -73,20 +85,27 @@ class RRResult:
     rr_tp3: float
 
     valid_stop_loss: bool
+
     minimum_rr: float
     passes_rr_filter: bool
 
 
 # ============================================================
-# VALIDATION
+# VALIDATION NUMÉRIQUE
 # ============================================================
 
-def _validate_price(
-    value: float,
+def _validate_number(
+    value: Any,
     name: str,
 ) -> float:
     """
-    Valide un prix.
+    Convertit et valide une valeur numérique.
+
+    Refuse :
+    - None ;
+    - texte non numérique ;
+    - NaN ;
+    - infini.
     """
 
     if value is None:
@@ -95,15 +114,107 @@ def _validate_price(
         )
 
     try:
-        value = float(value)
+        number = float(value)
 
     except (
         TypeError,
         ValueError,
-    ):
+    ) as exc:
+
         raise ValueError(
             f"{name} doit être numérique."
+        ) from exc
+
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{name} doit être une valeur "
+            "numérique finie."
         )
+
+    return number
+
+
+def _validate_price(
+    value: Any,
+    name: str,
+) -> float:
+    """
+    Valide un prix strictement positif.
+    """
+
+    value = _validate_number(
+        value,
+        name,
+    )
+
+    if value <= MIN_PRICE:
+        raise ValueError(
+            f"{name} doit être supérieur à 0."
+        )
+
+    return value
+
+
+# ============================================================
+# VALIDATION DIRECTION
+# ============================================================
+
+def _validate_direction(
+    direction: Any,
+) -> str:
+    """
+    Normalise et valide BUY / SELL.
+    """
+
+    if direction is None:
+        raise ValueError(
+            "direction est obligatoire."
+        )
+
+    normalized = str(
+        direction
+    ).upper().strip()
+
+    aliases = {
+        "BUY": BUY,
+        "LONG": BUY,
+
+        "SELL": SELL,
+        "SHORT": SELL,
+    }
+
+    normalized = aliases.get(
+        normalized,
+        normalized,
+    )
+
+    if normalized not in {
+        BUY,
+        SELL,
+    }:
+        raise ValueError(
+            "direction doit être BUY ou SELL."
+        )
+
+    return normalized
+
+
+# ============================================================
+# VALIDATION RR
+# ============================================================
+
+def _validate_rr(
+    value: Any,
+    name: str = "RR",
+) -> float:
+    """
+    Valide un ratio RR strictement positif.
+    """
+
+    value = _validate_number(
+        value,
+        name,
+    )
 
     if value <= 0:
         raise ValueError(
@@ -113,26 +224,73 @@ def _validate_price(
     return value
 
 
-def _validate_direction(
-    direction: str,
-) -> str:
+# ============================================================
+# VALIDATION DES NIVEAUX TP
+# ============================================================
+
+def _validate_tp_levels(
+    tp_levels: Sequence[Any],
+) -> List[float]:
     """
-    Valide BUY / SELL.
+    Valide les multiples RR utilisés pour les TP.
+
+    Exemple valide :
+
+        (1.0, 2.0, 3.0)
+
+    Les niveaux doivent être :
+    - numériques ;
+    - > 0 ;
+    - strictement croissants.
     """
 
-    direction = str(
-        direction
-    ).upper().strip()
-
-    if direction not in {
-        BUY,
-        SELL,
-    }:
+    if tp_levels is None:
         raise ValueError(
-            "direction doit être BUY ou SELL."
+            "tp_levels est obligatoire."
         )
 
-    return direction
+    try:
+        levels = list(tp_levels)
+
+    except TypeError as exc:
+
+        raise ValueError(
+            "tp_levels doit être une séquence "
+            "de niveaux numériques."
+        ) from exc
+
+    if not levels:
+        raise ValueError(
+            "tp_levels ne peut pas être vide."
+        )
+
+    normalized: List[float] = []
+
+    for index, level in enumerate(levels):
+
+        value = _validate_rr(
+            level,
+            f"tp_levels[{index}]",
+        )
+
+        normalized.append(value)
+
+    # --------------------------------------------------------
+    # Les niveaux doivent être strictement croissants
+    # --------------------------------------------------------
+
+    for previous, current in zip(
+        normalized,
+        normalized[1:],
+    ):
+
+        if current <= previous:
+            raise ValueError(
+                "Les niveaux TP doivent être "
+                "strictement croissants."
+            )
+
+    return normalized
 
 
 # ============================================================
@@ -145,7 +303,13 @@ def calculer_risque(
     direction: str,
 ) -> float:
     """
-    Calcule la distance entre Entry et SL.
+    Calcule la distance entre Entry et Stop Loss.
+
+    BUY :
+        risk = Entry - SL
+
+    SELL :
+        risk = SL - Entry
     """
 
     entry = _validate_price(
@@ -171,16 +335,17 @@ def calculer_risque(
         risk = stop_loss - entry
 
     if risk <= 0:
+
         raise ValueError(
             "Le Stop Loss est invalide "
-            "pour cette direction."
+            f"pour une position {direction}."
         )
 
     return risk
 
 
 # ============================================================
-# VALIDATION SL
+# VALIDATION STOP LOSS
 # ============================================================
 
 def valider_stop_loss(
@@ -189,7 +354,13 @@ def valider_stop_loss(
     direction: str,
 ) -> bool:
     """
-    Vérifie que le SL est placé du bon côté.
+    Vérifie que le SL est correctement placé.
+
+    BUY :
+        SL < Entry
+
+    SELL :
+        SL > Entry
     """
 
     entry = _validate_price(
@@ -224,7 +395,14 @@ def calculer_tp(
     rr: float,
 ) -> float:
     """
-    Calcule un TP selon un multiple RR.
+    Calcule un Take Profit à partir
+    d'un multiple de risque.
+
+    BUY :
+        TP = Entry + Risk × RR
+
+    SELL :
+        TP = Entry - Risk × RR
     """
 
     entry = _validate_price(
@@ -232,33 +410,42 @@ def calculer_tp(
         "entry",
     )
 
-    risk = float(risk)
+    risk = _validate_number(
+        risk,
+        "risk",
+    )
 
     direction = _validate_direction(
         direction
     )
 
-    rr = float(rr)
+    rr = _validate_rr(
+        rr
+    )
 
     if risk <= 0:
         raise ValueError(
-            "Le risque doit être > 0."
-        )
-
-    if rr <= 0:
-        raise ValueError(
-            "Le RR doit être > 0."
+            "Le risque doit être supérieur à 0."
         )
 
     if direction == BUY:
 
-        return entry + (
+        tp = entry + (
             risk * rr
         )
 
-    return entry - (
-        risk * rr
-    )
+    else:
+
+        tp = entry - (
+            risk * rr
+        )
+
+    if tp <= 0:
+        raise ValueError(
+            "Le Take Profit calculé est invalide."
+        )
+
+    return tp
 
 
 # ============================================================
@@ -272,6 +459,12 @@ def calculer_reward(
 ) -> float:
     """
     Calcule la récompense potentielle.
+
+    BUY :
+        Reward = TP - Entry
+
+    SELL :
+        Reward = Entry - TP
     """
 
     entry = _validate_price(
@@ -303,14 +496,14 @@ def calculer_reward(
     if reward <= 0:
         raise ValueError(
             "Le Take Profit est invalide "
-            "pour cette direction."
+            f"pour une position {direction}."
         )
 
     return reward
 
 
 # ============================================================
-# RR
+# CALCUL RR
 # ============================================================
 
 def calculer_rr(
@@ -318,20 +511,29 @@ def calculer_rr(
     reward: float,
 ) -> float:
     """
-    Calcule le ratio Risk / Reward.
+    Calcule :
+
+        RR = Reward / Risk
     """
 
-    risk = float(risk)
-    reward = float(reward)
+    risk = _validate_number(
+        risk,
+        "risk",
+    )
+
+    reward = _validate_number(
+        reward,
+        "reward",
+    )
 
     if risk <= 0:
         raise ValueError(
-            "Le risque doit être > 0."
+            "Le risque doit être supérieur à 0."
         )
 
     if reward <= 0:
         raise ValueError(
-            "La récompense doit être > 0."
+            "La récompense doit être supérieure à 0."
         )
 
     return reward / risk
@@ -348,7 +550,12 @@ def calculer_rr_prix(
     direction: str,
 ) -> float:
     """
-    Calcule directement le RR à partir de Entry / SL / TP.
+    Calcule directement le RR depuis :
+
+        Entry
+        SL
+        TP
+        Direction
     """
 
     risk = calculer_risque(
@@ -370,7 +577,7 @@ def calculer_rr_prix(
 
 
 # ============================================================
-# FILTRE RR
+# FILTRE RR MINIMUM
 # ============================================================
 
 def verifier_rr_minimum(
@@ -378,16 +585,18 @@ def verifier_rr_minimum(
     minimum_rr: float = DEFAULT_MIN_RR,
 ) -> bool:
     """
-    Vérifie si le RR respecte le minimum demandé.
+    Vérifie si le RR respecte le minimum requis.
     """
 
-    rr = float(rr)
-    minimum_rr = float(minimum_rr)
+    rr = _validate_rr(
+        rr,
+        "rr",
+    )
 
-    if minimum_rr <= 0:
-        raise ValueError(
-            "minimum_rr doit être > 0."
-        )
+    minimum_rr = _validate_rr(
+        minimum_rr,
+        "minimum_rr",
+    )
 
     return rr >= minimum_rr
 
@@ -401,11 +610,35 @@ def calculer_rr_complet(
     stop_loss: float,
     direction: str,
     minimum_rr: float = DEFAULT_MIN_RR,
-    tp_levels: tuple = DEFAULT_TP_LEVELS,
+    tp_levels: Sequence[Any] = DEFAULT_TP_LEVELS,
 ) -> RRResult:
     """
-    Calcule Entry / SL / TP / Risk / Reward / RR.
+    Calcul complet du Risk / Reward.
+
+    Produit :
+
+        Entry
+        SL
+        Risk
+
+        TP1
+        TP2
+        TP3
+
+        Reward TP1
+        Reward TP2
+        Reward TP3
+
+        RR TP1
+        RR TP2
+        RR TP3
+
+        filtre RR minimum
     """
+
+    # --------------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------------
 
     entry = _validate_price(
         entry,
@@ -421,22 +654,31 @@ def calculer_rr_complet(
         direction
     )
 
-    minimum_rr = float(
-        minimum_rr
+    minimum_rr = _validate_rr(
+        minimum_rr,
+        "minimum_rr",
     )
 
-    if minimum_rr <= 0:
-        raise ValueError(
-            "minimum_rr doit être > 0."
+    normalized_levels = _validate_tp_levels(
+        tp_levels
+    )
+
+    # --------------------------------------------------------
+    # GARANTIE : AU MOINS 3 TP
+    # --------------------------------------------------------
+
+    while len(normalized_levels) < 3:
+
+        next_level = (
+            normalized_levels[-1] + 1.0
         )
 
-    if not tp_levels:
-        raise ValueError(
-            "tp_levels ne peut pas être vide."
+        normalized_levels.append(
+            next_level
         )
 
     # --------------------------------------------------------
-    # SL
+    # VALIDATION SL
     # --------------------------------------------------------
 
     valid_sl = valider_stop_loss(
@@ -447,7 +689,8 @@ def calculer_rr_complet(
 
     if not valid_sl:
         raise ValueError(
-            "Stop Loss invalide."
+            "Stop Loss invalide pour la direction "
+            f"{direction}."
         )
 
     # --------------------------------------------------------
@@ -464,83 +707,65 @@ def calculer_rr_complet(
     # TP
     # --------------------------------------------------------
 
-    normalized_levels = [
-        float(level)
-        for level in tp_levels
-    ]
+    tps: List[float] = []
+
+    rewards: List[float] = []
+
+    rrs: List[float] = []
 
     for level in normalized_levels:
 
-        if level <= 0:
-            raise ValueError(
-                "Les niveaux TP doivent être > 0."
-            )
-
-    tps = [
-        calculer_tp(
-            entry,
-            risk,
-            direction,
-            level,
+        tp = calculer_tp(
+            entry=entry,
+            risk=risk,
+            direction=direction,
+            rr=level,
         )
-        for level in normalized_levels
-    ]
 
-    rewards = [
-        calculer_reward(
-            entry,
-            tp,
-            direction,
+        reward = calculer_reward(
+            entry=entry,
+            take_profit=tp,
+            direction=direction,
         )
-        for tp in tps
-    ]
 
-    rrs = [
-        calculer_rr(
-            risk,
-            reward,
+        rr_value = calculer_rr(
+            risk=risk,
+            reward=reward,
         )
-        for reward in rewards
-    ]
+
+        tps.append(tp)
+        rewards.append(reward)
+        rrs.append(rr_value)
 
     # --------------------------------------------------------
-    # SÉCURITÉ : au moins 3 TP
+    # TP1 / TP2 / TP3
     # --------------------------------------------------------
 
-    while len(tps) < 3:
+    tp1 = tps[0]
+    tp2 = tps[1]
+    tp3 = tps[2]
 
-        next_level = (
-            normalized_levels[-1]
-            + 1.0
-        )
+    reward_tp1 = rewards[0]
+    reward_tp2 = rewards[1]
+    reward_tp3 = rewards[2]
 
-        normalized_levels.append(
-            next_level
-        )
+    rr_tp1 = rrs[0]
+    rr_tp2 = rrs[1]
+    rr_tp3 = rrs[2]
 
-        tps.append(
-            calculer_tp(
-                entry,
-                risk,
-                direction,
-                next_level,
-            )
-        )
+    # --------------------------------------------------------
+    # FILTRE RR
+    #
+    # Le filtre principal de Vision Trade AI V2
+    # utilise TP2 comme référence.
+    #
+    # TP2 par défaut = RR 2.0
+    # --------------------------------------------------------
 
-        rewards.append(
-            calculer_reward(
-                entry,
-                tps[-1],
-                direction,
-            )
-        )
-
-        rrs.append(
-            calculer_rr(
-                risk,
-                rewards[-1],
-            )
-        )
+    passes_rr_filter = verifier_rr_minimum(
+        rr_tp2,
+        minimum_rr,
+    )
 
     return RRResult(
         direction=direction,
@@ -550,40 +775,40 @@ def calculer_rr_complet(
 
         risk=risk,
 
-        tp1=tps[0],
-        tp2=tps[1],
-        tp3=tps[2],
+        tp1=tp1,
+        tp2=tp2,
+        tp3=tp3,
 
-        reward_tp1=rewards[0],
-        reward_tp2=rewards[1],
-        reward_tp3=rewards[2],
+        reward_tp1=reward_tp1,
+        reward_tp2=reward_tp2,
+        reward_tp3=reward_tp3,
 
-        rr_tp1=rrs[0],
-        rr_tp2=rrs[1],
-        rr_tp3=rrs[2],
+        rr_tp1=rr_tp1,
+        rr_tp2=rr_tp2,
+        rr_tp3=rr_tp3,
 
         valid_stop_loss=valid_sl,
 
         minimum_rr=minimum_rr,
 
-        passes_rr_filter=(
-            rrs[1] >= minimum_rr
-        ),
+        passes_rr_filter=passes_rr_filter,
     )
 
 
 # ============================================================
-# ANALYSE DE QUALITÉ DU RR
+# QUALIFICATION RR
 # ============================================================
 
 def qualifier_rr(
     rr: float,
 ) -> str:
     """
-    Classe le RR.
+    Classe la qualité du RR.
     """
 
-    rr = float(rr)
+    rr = _validate_rr(
+        rr
+    )
 
     if rr >= 4.0:
         return "EXCELLENT"
@@ -606,10 +831,20 @@ def qualifier_rr(
 
 def resume_rr(
     result: RRResult,
-) -> Dict:
+) -> Dict[str, Any]:
     """
-    Retourne un résumé exploitable par les modules supérieurs.
+    Transforme RRResult en dictionnaire
+    exploitable par les modules supérieurs.
     """
+
+    if not isinstance(
+        result,
+        RRResult,
+    ):
+        raise TypeError(
+            "result doit être une instance "
+            "de RRResult."
+        )
 
     return {
         "direction": result.direction,
@@ -624,34 +859,73 @@ def resume_rr(
         "tp2": result.tp2,
         "tp3": result.tp3,
 
+        "reward_tp1": result.reward_tp1,
+        "reward_tp2": result.reward_tp2,
+        "reward_tp3": result.reward_tp3,
+
         "rr_tp1": result.rr_tp1,
         "rr_tp2": result.rr_tp2,
         "rr_tp3": result.rr_tp3,
 
         "minimum_rr": result.minimum_rr,
 
+        "valid_stop_loss": (
+            result.valid_stop_loss
+        ),
+
         "passes_rr_filter": (
             result.passes_rr_filter
+        ),
+
+        "quality_tp1": qualifier_rr(
+            result.rr_tp1
         ),
 
         "quality_tp2": qualifier_rr(
             result.rr_tp2
         ),
+
+        "quality_tp3": qualifier_rr(
+            result.rr_tp3
+        ),
     }
 
 
 # ============================================================
-# TEST
+# DICTIONNAIRE COMPLET
+# ============================================================
+
+def rr_to_dict(
+    result: RRResult,
+) -> Dict[str, Any]:
+    """
+    Convertit RRResult en dictionnaire complet.
+    """
+
+    if not isinstance(
+        result,
+        RRResult,
+    ):
+        raise TypeError(
+            "result doit être une instance "
+            "de RRResult."
+        )
+
+    return asdict(result)
+
+
+# ============================================================
+# TESTS INTERNES
 # ============================================================
 
 def _run_internal_test() -> None:
     """
-    Test du moteur RR.
+    Batterie de tests du moteur RR.
     """
 
-    # --------------------------------------------------------
+    # ========================================================
     # BUY
-    # --------------------------------------------------------
+    # ========================================================
 
     buy = calculer_rr_complet(
         entry=100.0,
@@ -659,10 +933,17 @@ def _run_internal_test() -> None:
         direction=BUY,
     )
 
+    assert buy.valid_stop_loss is True
+
     assert buy.risk == 2.0
+
     assert buy.tp1 == 102.0
     assert buy.tp2 == 104.0
     assert buy.tp3 == 106.0
+
+    assert buy.reward_tp1 == 2.0
+    assert buy.reward_tp2 == 4.0
+    assert buy.reward_tp3 == 6.0
 
     assert buy.rr_tp1 == 1.0
     assert buy.rr_tp2 == 2.0
@@ -670,9 +951,9 @@ def _run_internal_test() -> None:
 
     assert buy.passes_rr_filter is True
 
-    # --------------------------------------------------------
+    # ========================================================
     # SELL
-    # --------------------------------------------------------
+    # ========================================================
 
     sell = calculer_rr_complet(
         entry=100.0,
@@ -680,10 +961,17 @@ def _run_internal_test() -> None:
         direction=SELL,
     )
 
+    assert sell.valid_stop_loss is True
+
     assert sell.risk == 2.0
+
     assert sell.tp1 == 98.0
     assert sell.tp2 == 96.0
     assert sell.tp3 == 94.0
+
+    assert sell.reward_tp1 == 2.0
+    assert sell.reward_tp2 == 4.0
+    assert sell.reward_tp3 == 6.0
 
     assert sell.rr_tp1 == 1.0
     assert sell.rr_tp2 == 2.0
@@ -691,35 +979,236 @@ def _run_internal_test() -> None:
 
     assert sell.passes_rr_filter is True
 
-    # --------------------------------------------------------
-    # RR
-    # --------------------------------------------------------
+    # ========================================================
+    # RR DIRECT
+    # ========================================================
 
-    rr = calculer_rr_prix(
+    rr_buy = calculer_rr_prix(
         entry=100.0,
         stop_loss=98.0,
         take_profit=104.0,
         direction=BUY,
     )
 
-    assert rr == 2.0
+    assert rr_buy == 2.0
 
-    # --------------------------------------------------------
+    rr_sell = calculer_rr_prix(
+        entry=100.0,
+        stop_loss=102.0,
+        take_profit=96.0,
+        direction=SELL,
+    )
+
+    assert rr_sell == 2.0
+
+    # ========================================================
+    # VALIDATION SL
+    # ========================================================
+
+    assert valider_stop_loss(
+        100.0,
+        98.0,
+        BUY,
+    ) is True
+
+    assert valider_stop_loss(
+        100.0,
+        102.0,
+        SELL,
+    ) is True
+
+    assert valider_stop_loss(
+        100.0,
+        102.0,
+        BUY,
+    ) is False
+
+    assert valider_stop_loss(
+        100.0,
+        98.0,
+        SELL,
+    ) is False
+
+    # ========================================================
+    # FILTRE RR
+    # ========================================================
+
+    assert verifier_rr_minimum(
+        2.0,
+        2.0,
+    ) is True
+
+    assert verifier_rr_minimum(
+        2.5,
+        2.0,
+    ) is True
+
+    assert verifier_rr_minimum(
+        1.9,
+        2.0,
+    ) is False
+
+    # ========================================================
     # QUALIFICATION
-    # --------------------------------------------------------
+    # ========================================================
 
-    assert (
-        qualifier_rr(4.0)
-        == "EXCELLENT"
+    assert qualifier_rr(
+        4.0
+    ) == "EXCELLENT"
+
+    assert qualifier_rr(
+        3.0
+    ) == "TRÈS BON"
+
+    assert qualifier_rr(
+        2.0
+    ) == "BON"
+
+    assert qualifier_rr(
+        1.5
+    ) == "ACCEPTABLE"
+
+    assert qualifier_rr(
+        1.0
+    ) == "FAIBLE"
+
+    # ========================================================
+    # TP PERSONNALISÉS
+    # ========================================================
+
+    custom = calculer_rr_complet(
+        entry=100.0,
+        stop_loss=95.0,
+        direction=BUY,
+        minimum_rr=2.0,
+        tp_levels=(
+            1.0,
+            2.5,
+            4.0,
+        ),
     )
 
-    assert (
-        qualifier_rr(2.0)
-        == "BON"
+    assert custom.risk == 5.0
+
+    assert custom.tp1 == 105.0
+    assert custom.tp2 == 112.5
+    assert custom.tp3 == 120.0
+
+    assert custom.rr_tp1 == 1.0
+    assert custom.rr_tp2 == 2.5
+    assert custom.rr_tp3 == 4.0
+
+    assert custom.passes_rr_filter is True
+
+    # ========================================================
+    # RR INSUFFISANT
+    # ========================================================
+
+    weak = calculer_rr_complet(
+        entry=100.0,
+        stop_loss=98.0,
+        direction=BUY,
+        minimum_rr=3.0,
+        tp_levels=(
+            1.0,
+            2.0,
+            3.0,
+        ),
     )
+
+    assert weak.passes_rr_filter is False
+
+    # ========================================================
+    # TEST ERREURS
+    # ========================================================
+
+    try:
+
+        calculer_risque(
+            entry=100.0,
+            stop_loss=102.0,
+            direction=BUY,
+        )
+
+        raise AssertionError(
+            "Un SL BUY invalide aurait dû "
+            "lever une exception."
+        )
+
+    except ValueError:
+        pass
+
+    try:
+
+        calculer_risque(
+            entry=100.0,
+            stop_loss=98.0,
+            direction=SELL,
+        )
+
+        raise AssertionError(
+            "Un SL SELL invalide aurait dû "
+            "lever une exception."
+        )
+
+    except ValueError:
+        pass
+
+    try:
+
+        calculer_rr_complet(
+            entry=100.0,
+            stop_loss=98.0,
+            direction=BUY,
+            tp_levels=(
+                2.0,
+                1.0,
+                3.0,
+            ),
+        )
+
+        raise AssertionError(
+            "Des niveaux TP non croissants "
+            "auraient dû lever une exception."
+        )
+
+    except ValueError:
+        pass
+
+    try:
+
+        calculer_rr_complet(
+            entry=100.0,
+            stop_loss=98.0,
+            direction=BUY,
+            minimum_rr=0,
+        )
+
+        raise AssertionError(
+            "minimum_rr=0 aurait dû "
+            "lever une exception."
+        )
+
+    except ValueError:
+        pass
+
+    try:
+
+        calculer_rr_complet(
+            entry=float("nan"),
+            stop_loss=98.0,
+            direction=BUY,
+        )
+
+        raise AssertionError(
+            "NaN aurait dû être refusé."
+        )
+
+    except ValueError:
+        pass
 
     logger.info(
-        "Test RR réussi."
+        "Tous les tests RR sont réussis."
     )
 
 
@@ -745,12 +1234,104 @@ if __name__ == "__main__":
 
         _run_internal_test()
 
-        print("\n✅ RR : OK")
+        print()
+        print("✅ RR : OK")
         print(
             "Risk / Reward déterministe opérationnel."
         )
 
+        # ----------------------------------------------------
+        # DÉMONSTRATION BUY
+        # ----------------------------------------------------
+
+        demo_buy = calculer_rr_complet(
+            entry=100.0,
+            stop_loss=98.0,
+            direction=BUY,
+        )
+
+        print()
+        print("----- BUY -----")
+        print(
+            f"Entry      : {demo_buy.entry}"
+        )
+        print(
+            f"Stop Loss  : {demo_buy.stop_loss}"
+        )
+        print(
+            f"Risk       : {demo_buy.risk}"
+        )
+        print(
+            f"TP1        : {demo_buy.tp1}"
+        )
+        print(
+            f"TP2        : {demo_buy.tp2}"
+        )
+        print(
+            f"TP3        : {demo_buy.tp3}"
+        )
+        print(
+            f"RR TP1     : {demo_buy.rr_tp1}"
+        )
+        print(
+            f"RR TP2     : {demo_buy.rr_tp2}"
+        )
+        print(
+            f"RR TP3     : {demo_buy.rr_tp3}"
+        )
+        print(
+            f"RR FILTER  : "
+            f"{demo_buy.passes_rr_filter}"
+        )
+
+        # ----------------------------------------------------
+        # DÉMONSTRATION SELL
+        # ----------------------------------------------------
+
+        demo_sell = calculer_rr_complet(
+            entry=100.0,
+            stop_loss=102.0,
+            direction=SELL,
+        )
+
+        print()
+        print("----- SELL -----")
+        print(
+            f"Entry      : {demo_sell.entry}"
+        )
+        print(
+            f"Stop Loss  : {demo_sell.stop_loss}"
+        )
+        print(
+            f"Risk       : {demo_sell.risk}"
+        )
+        print(
+            f"TP1        : {demo_sell.tp1}"
+        )
+        print(
+            f"TP2        : {demo_sell.tp2}"
+        )
+        print(
+            f"TP3        : {demo_sell.tp3}"
+        )
+        print(
+            f"RR TP1     : {demo_sell.rr_tp1}"
+        )
+        print(
+            f"RR TP2     : {demo_sell.rr_tp2}"
+        )
+        print(
+            f"RR TP3     : {demo_sell.rr_tp3}"
+        )
+        print(
+            f"RR FILTER  : "
+            f"{demo_sell.passes_rr_filter}"
+        )
+
     except Exception as exc:
 
-        print("\n❌ TEST RR ÉCHOUÉ")
-        print(f"Erreur : {exc}")
+        print()
+        print("❌ TEST RR ÉCHOUÉ")
+        print(
+            f"Erreur : {type(exc).__name__}: {exc}"
+        )
