@@ -129,23 +129,19 @@ def _safe_float(
     - int
     - float
     - string numérique
-    - liste/tuple contenant des valeurs
+    - liste/tuple
+    - dictionnaire
     - None
     """
 
     if value is None:
         return default
 
-    # --------------------------------------------------------
-    # Cas liste / tuple
-    # --------------------------------------------------------
-
     if isinstance(value, (list, tuple)):
 
         if not value:
             return default
 
-        # On cherche la dernière valeur exploitable.
         for item in reversed(value):
 
             result = _safe_float(
@@ -157,10 +153,6 @@ def _safe_float(
                 return result
 
         return default
-
-    # --------------------------------------------------------
-    # Cas dictionnaire
-    # --------------------------------------------------------
 
     if isinstance(value, dict):
 
@@ -184,10 +176,6 @@ def _safe_float(
 
         return default
 
-    # --------------------------------------------------------
-    # Conversion normale
-    # --------------------------------------------------------
-
     try:
         return float(value)
 
@@ -205,8 +193,7 @@ def _last_indicator_value(
     """
     Récupère la dernière valeur d'un indicateur.
 
-    Les fonctions EMA / RSI / ATR de indicateurs.py
-    retournent actuellement des listes.
+    EMA / RSI / ATR retournent actuellement des listes.
     """
 
     if isinstance(value, (list, tuple)):
@@ -435,11 +422,8 @@ def analyser_timeframe(
         candles,
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT :
-    # indicateurs.py retourne des listes.
+    # Les indicateurs retournent des listes.
     # On prend uniquement la dernière valeur.
-    # --------------------------------------------------------
 
     ema20 = _last_indicator_value(
         ema20_raw
@@ -523,16 +507,6 @@ def analyser_timeframe(
                 structure_breaks.extend(
                     choch
                 )
-
-        # ----------------------------------------------------
-        # IMPORTANT :
-        # structure.py accepte maintenant :
-        #
-        # detecter_order_blocks(
-        #     candles,
-        #     structure_breaks
-        # )
-        # ----------------------------------------------------
 
         order_blocks = detecter_order_blocks(
             candles,
@@ -921,10 +895,6 @@ def construire_contexte_indicateurs(
 ) -> Dict[str, Any]:
     """
     Construit le contexte utilisé par score.py.
-
-    Important :
-    EMA / RSI / ATR peuvent être des listes.
-    _last_indicator_value() sécurise l'extraction.
     """
 
     ema20 = _last_indicator_value(
@@ -1176,13 +1146,16 @@ def determiner_stop_loss(
     atr: float = 0.0,
 ) -> Optional[float]:
     """
-    Détermine un SL technique.
+    Détermine un Stop Loss technique.
 
     Priorité :
 
-        1. Swing M15
-        2. Swing H1
+        1. Swing M15 valide
+        2. Swing H1 valide
         3. ATR de sécurité
+
+    BUY  -> SL sous l'entrée
+    SELL -> SL au-dessus de l'entrée
     """
 
     direction = _normalize_direction(
@@ -1208,6 +1181,10 @@ def determiner_stop_loss(
         h1_analysis
     )
 
+    # ========================================================
+    # BUY
+    # ========================================================
+
     if direction == BUY:
 
         candidates = []
@@ -1225,6 +1202,7 @@ def determiner_stop_loss(
         )
 
         if candidates:
+
             return max(
                 candidates
             )
@@ -1237,6 +1215,10 @@ def determiner_stop_loss(
 
             if stop > 0:
                 return stop
+
+    # ========================================================
+    # SELL
+    # ========================================================
 
     elif direction == SELL:
 
@@ -1255,6 +1237,7 @@ def determiner_stop_loss(
         )
 
         if candidates:
+
             return min(
                 candidates
             )
@@ -1858,7 +1841,6 @@ def analyse(
 def _run_internal_test() -> None:
     """Tests internes."""
 
-    # Direction
     assert _normalize_direction(
         "buy"
     ) == BUY
@@ -1871,12 +1853,10 @@ def _run_internal_test() -> None:
         "xxx"
     ) == NEUTRAL
 
-    # Float normal
     assert _safe_float(
         "100.5"
     ) == 100.5
 
-    # Liste indicateur
     assert _last_indicator_value(
         [100, 101, 102]
     ) == 102
@@ -1885,7 +1865,6 @@ def _run_internal_test() -> None:
         [50.5]
     ) == 50.5
 
-    # Indicateurs
     indicators = construire_contexte_indicateurs(
         {
             "ema20": [1990, 2000],
@@ -1911,7 +1890,6 @@ def _run_internal_test() -> None:
         == "bullish_bias"
     )
 
-    # Extraction swings
     fake_analysis = {
         "swings": {
             "highs": [
@@ -1941,7 +1919,6 @@ def _run_internal_test() -> None:
         1980
     ]
 
-    # SL BUY
     buy_sl = determiner_stop_loss(
         direction=BUY,
         entry=2000,
@@ -1952,7 +1929,6 @@ def _run_internal_test() -> None:
 
     assert buy_sl == 1980
 
-    # SL SELL
     sell_sl = determiner_stop_loss(
         direction=SELL,
         entry=2000,
@@ -1963,7 +1939,6 @@ def _run_internal_test() -> None:
 
     assert sell_sl == 2050
 
-    # Validation SL
     assert _validate_stop_loss(
         BUY,
         2000,
