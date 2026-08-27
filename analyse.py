@@ -554,29 +554,81 @@ def determiner_direction(
     m15: Dict[str, Any],
 ) -> str:
     """
-    Détermine la direction principale.
+    Détermine la direction principale du marché.
 
-    H4 = tendance globale
-    H1 = structure principale
-    M15 = contexte
+    Hiérarchie :
 
-    M5 n'intervient jamais.
+        H4  = tendance globale
+        H1  = structure principale
+        M15 = contexte
+
+    Règles :
+
+    1. H4 + H1 + M15 alignés
+       -> direction commune
+
+    2. H4 + H1 alignés
+       -> direction H4/H1
+
+    3. H4 + M15 alignés
+       -> direction H4/M15
+
+    4. H4 seul avec H1/M15 NEUTRAL
+       -> direction H4
+
+    5. H4 NEUTRAL :
+       H1 + M15 doivent être alignés
+       pour produire une direction.
+
+    6. Tout conflit non résolu
+       -> NEUTRAL
+
+    M5 n'intervient jamais ici.
     """
 
-    if not isinstance(h4, dict):
+    # ========================================================
+    # SÉCURITÉ
+    # ========================================================
+
+    if not isinstance(
+        h4,
+        dict,
+    ):
         h4 = {}
 
-    if not isinstance(h1, dict):
+    if not isinstance(
+        h1,
+        dict,
+    ):
         h1 = {}
 
-    if not isinstance(m15, dict):
+    if not isinstance(
+        m15,
+        dict,
+    ):
         m15 = {}
+
+    # ========================================================
+    # EXTRACTION
+    # ========================================================
 
     h4_bias = _extract_bias(h4)
     h1_bias = _extract_bias(h1)
     m15_bias = _extract_bias(m15)
 
     # ========================================================
+    # LOG
+    # ========================================================
+
+    logger.debug(
+        "DIRECTION INPUT : H4=%s | H1=%s | M15=%s",
+        h4_bias,
+        h1_bias,
+        m15_bias,
+    )
+
+    # ========================================================
+    # CAS 1
     # H4 NEUTRAL
     # ========================================================
 
@@ -586,25 +638,49 @@ def determiner_direction(
             h1_bias != NEUTRAL
             and h1_bias == m15_bias
         ):
+            logger.debug(
+                "DIRECTION : H4 NEUTRAL, H1/M15 alignés -> %s",
+                h1_bias,
+            )
+
             return h1_bias
+
+        logger.debug(
+            "DIRECTION : H4 NEUTRAL sans confirmation -> NEUTRAL"
+        )
 
         return NEUTRAL
 
     # ========================================================
+    # CAS 2
     # H4 + H1 ALIGNÉS
     # ========================================================
 
     if h1_bias == h4_bias:
+
+        logger.debug(
+            "DIRECTION : H4/H1 alignés -> %s",
+            h4_bias,
+        )
+
         return h4_bias
 
     # ========================================================
+    # CAS 3
     # H4 + M15 ALIGNÉS
     # ========================================================
 
     if m15_bias == h4_bias:
+
+        logger.debug(
+            "DIRECTION : H4/M15 alignés -> %s",
+            h4_bias,
+        )
+
         return h4_bias
 
     # ========================================================
+    # CAS 4
     # H4 SEUL
     # ========================================================
 
@@ -612,11 +688,22 @@ def determiner_direction(
         h1_bias == NEUTRAL
         and m15_bias == NEUTRAL
     ):
+
+        logger.debug(
+            "DIRECTION : H4 seul -> %s",
+            h4_bias,
+        )
+
         return h4_bias
 
     # ========================================================
+    # CAS 5
     # CONFLIT
     # ========================================================
+
+    logger.debug(
+        "DIRECTION : conflit H4/H1/M15 -> NEUTRAL"
+    )
 
     return NEUTRAL
 
@@ -982,6 +1069,7 @@ def _normaliser_structure_fibonacci(
 
             try:
                 index = int(index)
+
             except (
                 TypeError,
                 ValueError,
@@ -1037,6 +1125,7 @@ def _normaliser_structure_fibonacci(
 
             try:
                 index = int(index)
+
             except (
                 TypeError,
                 ValueError,
@@ -2262,6 +2351,16 @@ def _run_internal_test():
     )
 
     assert (
+        _normalize_direction("LONG")
+        == BUY
+    )
+
+    assert (
+        _normalize_direction("SHORT")
+        == SELL
+    )
+
+    assert (
         _normalize_direction("xxx")
         == NEUTRAL
     )
@@ -2288,20 +2387,37 @@ def _run_internal_test():
         == SELL
     )
 
-    assert (
-        determiner_direction(
-            {"bias": SELL},
-            {"bias": NEUTRAL},
-            {"bias": NEUTRAL},
-        )
-        == SELL
+    # H4 seul doit conserver sa direction
+
+    result = determiner_direction(
+        {"bias": SELL},
+        {"bias": NEUTRAL},
+        {"bias": NEUTRAL},
     )
+
+    assert result == SELL, (
+        f"Erreur direction H4 seul SELL : "
+        f"attendu SELL, obtenu {result}"
+    )
+
+    result = determiner_direction(
+        {"bias": BUY},
+        {"bias": NEUTRAL},
+        {"bias": NEUTRAL},
+    )
+
+    assert result == BUY, (
+        f"Erreur direction H4 seul BUY : "
+        f"attendu BUY, obtenu {result}"
+    )
+
+    # H1 + M15 alignés avec H4 neutre
 
     assert (
         determiner_direction(
+            {"bias": NEUTRAL},
             {"bias": BUY},
-            {"bias": NEUTRAL},
-            {"bias": NEUTRAL},
+            {"bias": BUY},
         )
         == BUY
     )
@@ -2309,7 +2425,18 @@ def _run_internal_test():
     assert (
         determiner_direction(
             {"bias": NEUTRAL},
+            {"bias": SELL},
+            {"bias": SELL},
+        )
+        == SELL
+    )
+
+    # H4 + M15 alignés
+
+    assert (
+        determiner_direction(
             {"bias": BUY},
+            {"bias": NEUTRAL},
             {"bias": BUY},
         )
         == BUY
@@ -2317,12 +2444,14 @@ def _run_internal_test():
 
     assert (
         determiner_direction(
-            {"bias": NEUTRAL},
             {"bias": SELL},
+            {"bias": NEUTRAL},
             {"bias": SELL},
         )
         == SELL
     )
+
+    # Conflits
 
     assert (
         determiner_direction(
@@ -2338,6 +2467,35 @@ def _run_internal_test():
             {"bias": BUY},
             {"bias": SELL},
             {"bias": SELL},
+        )
+        == NEUTRAL
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": BUY},
+            {"bias": SELL},
+            {"bias": NEUTRAL},
+        )
+        == NEUTRAL
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": SELL},
+            {"bias": BUY},
+            {"bias": NEUTRAL},
+        )
+        == NEUTRAL
+    )
+
+    # Tous NEUTRAL
+
+    assert (
+        determiner_direction(
+            {"bias": NEUTRAL},
+            {"bias": NEUTRAL},
+            {"bias": NEUTRAL},
         )
         == NEUTRAL
     )
@@ -2362,6 +2520,16 @@ def _run_internal_test():
     assert indicators["ema50"] == 100
     assert indicators["rsi"] == 55
     assert indicators["atr"] == 6
+
+    assert (
+        indicators["ema_context"]
+        == "bullish"
+    )
+
+    assert (
+        indicators["rsi_context"]
+        == "bullish_bias"
+    )
 
     # ========================================================
     # NORMALISATION FIBONACCI
@@ -2405,6 +2573,16 @@ def _run_internal_test():
     assert (
         normalized["swings"]["lows"][0]["price"]
         == 180
+    )
+
+    assert (
+        normalized["swings"]["highs"][0]["index"]
+        == 90
+    )
+
+    assert (
+        normalized["swings"]["lows"][0]["index"]
+        == 80
     )
 
     # ========================================================
@@ -2490,7 +2668,33 @@ def _run_internal_test():
     )
 
     # ========================================================
-    # VALIDATION SL
+    # STOP LOSS ATR FALLBACK
+    # ========================================================
+
+    assert (
+        determiner_stop_loss(
+            BUY,
+            100,
+            {"swings": {}},
+            {"swings": {}},
+            5,
+        )
+        == 92.5
+    )
+
+    assert (
+        determiner_stop_loss(
+            SELL,
+            100,
+            {"swings": {}},
+            {"swings": {}},
+            5,
+        )
+        == 107.5
+    )
+
+    # ========================================================
+    # VALIDATION STOP LOSS
     # ========================================================
 
     assert (
@@ -2523,6 +2727,15 @@ def _run_internal_test():
     assert (
         _validate_stop_loss(
             SELL,
+            100,
+            90,
+        )
+        is False
+    )
+
+    assert (
+        _validate_stop_loss(
+            NEUTRAL,
             100,
             90,
         )
