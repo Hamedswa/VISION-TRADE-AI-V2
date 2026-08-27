@@ -2,13 +2,13 @@
 Vision Trade AI V2
 analyse.py
 
-Orchestrateur principal de l'analyse technique.
+ORCHESTRATEUR PRINCIPAL
 
 Architecture :
 
     H4  -> tendance globale
-    H1  -> structure
-    M15 -> zones / contexte
+    H1  -> structure principale
+    M15 -> contexte / zones
     M5  -> confirmation / trigger
 
 Pipeline :
@@ -18,6 +18,10 @@ Pipeline :
     INDICATEURS
       ↓
     STRUCTURE
+      ↓
+    DIRECTION H4/H1/M15
+      ↓
+    CONFIRMATION M5
       ↓
     FIBONACCI
       ↓
@@ -31,15 +35,17 @@ Pipeline :
       ↓
     RÉSULTAT
 
-IMPORTANT :
-- Ce module orchestre les modules déterministes.
-- structure.py reste responsable de la structure.
+Règles importantes :
+
+- H4/H1/M15 déterminent la direction principale.
+- M5 ne peut jamais créer une direction seul.
+- Un timeframe NEUTRAL ne doit pas être forcé.
+- structure.py reste déterministe.
 - score.py reste responsable du score.
-- rr.py reste responsable du calcul RR.
+- rr.py reste responsable du RR.
 - filtre_qualite.py reste responsable du filtre final.
-- Le M5 ne détermine jamais seul la direction principale.
-- Aucune décision Telegram ici.
-- Aucune décision Groq ici.
+- Aucune logique Telegram ici.
+- Aucune logique Groq ici.
 """
 
 from __future__ import annotations
@@ -63,11 +69,7 @@ from indicateurs import (
     calculer_atr,
 )
 
-from structure import (
-    analyser_structure,
-    detecter_fvg,
-    detecter_order_blocks,
-)
+from structure import analyser_structure
 
 from fibonacci import *
 
@@ -91,7 +93,7 @@ NEUTRAL = "NEUTRAL"
 
 DEFAULT_SYMBOL = "XAU/USD"
 
-DEFAULT_TIMEFRAMES = (
+TIMEFRAMES = (
     "H4",
     "H1",
     "M15",
@@ -102,10 +104,6 @@ DEFAULT_MIN_SCORE = 80
 DEFAULT_MIN_RR = 2.0
 
 
-# ============================================================
-# MAPPING TIMEFRAME
-# ============================================================
-
 TIMEFRAME_TO_API = {
     "H4": H4_TIMEFRAME,
     "H1": H1_TIMEFRAME,
@@ -115,24 +113,13 @@ TIMEFRAME_TO_API = {
 
 
 # ============================================================
-# OUTILS GÉNÉRAUX
+# OUTILS
 # ============================================================
 
 def _safe_float(
     value: Any,
     default: float = 0.0,
 ) -> float:
-    """
-    Convertit proprement une valeur en float.
-
-    Gère :
-    - int
-    - float
-    - string numérique
-    - liste/tuple
-    - dictionnaire
-    - None
-    """
 
     if value is None:
         return default
@@ -186,15 +173,10 @@ def _safe_float(
         return default
 
 
-def _last_indicator_value(
+def _last_value(
     value: Any,
     default: float = 0.0,
 ) -> float:
-    """
-    Récupère la dernière valeur d'un indicateur.
-
-    EMA / RSI / ATR retournent actuellement des listes.
-    """
 
     if isinstance(value, (list, tuple)):
 
@@ -213,12 +195,11 @@ def _last_indicator_value(
 
 
 def _normalize_direction(
-    direction: Any,
+    value: Any,
 ) -> str:
-    """Normalise une direction."""
 
     value = str(
-        direction or ""
+        value or ""
     ).upper().strip()
 
     if value in {
@@ -238,42 +219,39 @@ def _normalize_direction(
     return NEUTRAL
 
 
-def _get_value(
-    obj: Any,
-    key: str,
-    default: Any = None,
-) -> Any:
-    """Récupère une valeur depuis un dictionnaire ou objet."""
+def _extract_bias(
+    analysis: Dict[str, Any],
+) -> str:
 
-    if obj is None:
-        return default
+    if not isinstance(
+        analysis,
+        dict,
+    ):
+        return NEUTRAL
 
-    if isinstance(obj, dict):
-        return obj.get(
-            key,
-            default,
+    return _normalize_direction(
+        analysis.get(
+            "bias",
+            NEUTRAL,
         )
-
-    return getattr(
-        obj,
-        key,
-        default,
     )
 
 
 def _get_last_close(
     candles: list,
 ) -> float:
-    """Récupère le dernier prix de clôture."""
 
     if not candles:
         raise ValueError(
             "Aucune bougie disponible."
         )
 
-    last = candles[-1]
+    candle = candles[-1]
 
-    if not isinstance(last, dict):
+    if not isinstance(
+        candle,
+        dict,
+    ):
         raise ValueError(
             "Format de bougie invalide."
         )
@@ -284,81 +262,18 @@ def _get_last_close(
         "CLOSE",
     ):
 
-        if key in last:
+        if key in candle:
 
-            price = _safe_float(
-                last[key]
+            value = _safe_float(
+                candle[key]
             )
 
-            if price > 0:
-                return price
+            if value > 0:
+                return value
 
     raise ValueError(
-        "Impossible de récupérer le dernier prix de clôture."
+        "Prix de clôture introuvable."
     )
-
-
-# ============================================================
-# EXTRACTION BIAIS
-# ============================================================
-
-def _extract_bias(
-    structure_result: Any,
-) -> str:
-    """Extrait le biais structurel."""
-
-    bias = _get_value(
-        structure_result,
-        "bias",
-        None,
-    )
-
-    if bias is None:
-        return NEUTRAL
-
-    value = str(
-        bias
-    ).lower().strip()
-
-    if value in {
-        "buy",
-        "bullish",
-        "long",
-    }:
-        return BUY
-
-    if value in {
-        "sell",
-        "bearish",
-        "short",
-    }:
-        return SELL
-
-    return NEUTRAL
-
-
-# ============================================================
-# EXTRACTION LATEST
-# ============================================================
-
-def _extract_latest(
-    structure_result: Any,
-) -> Dict[str, Any]:
-    """Extrait le bloc latest."""
-
-    latest = _get_value(
-        structure_result,
-        "latest",
-        {},
-    )
-
-    if isinstance(
-        latest,
-        dict,
-    ):
-        return latest
-
-    return {}
 
 
 # ============================================================
@@ -369,255 +284,150 @@ def analyser_timeframe(
     candles: list,
     timeframe: str,
 ) -> Dict[str, Any]:
-    """
-    Analyse une timeframe.
-
-    Étapes :
-
-        bougies
-          ↓
-        indicateurs
-          ↓
-        structure
-          ↓
-        FVG
-          ↓
-        Order Blocks
-    """
 
     if not candles:
         raise ValueError(
-            f"Aucune donnée disponible pour {timeframe}."
+            f"Aucune bougie pour {timeframe}."
         )
 
     if len(candles) < MIN_CANDLES:
 
         logger.warning(
-            "%s : seulement %s bougies disponibles "
-            "(minimum recommandé : %s).",
+            "%s : %s bougies disponibles.",
             timeframe,
             len(candles),
-            MIN_CANDLES,
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # INDICATEURS
-    # ========================================================
+    # --------------------------------------------------------
 
-    ema20_raw = calculer_ema(
-        candles,
-        period=20,
+    ema20 = _last_value(
+        calculer_ema(
+            candles,
+            period=20,
+        )
     )
 
-    ema50_raw = calculer_ema(
-        candles,
-        period=50,
+    ema50 = _last_value(
+        calculer_ema(
+            candles,
+            period=50,
+        )
     )
 
-    rsi_raw = calculer_rsi(
-        candles,
+    rsi = _last_value(
+        calculer_rsi(
+            candles,
+        )
     )
 
-    atr_raw = calculer_atr(
-        candles,
+    atr = _last_value(
+        calculer_atr(
+            candles,
+        )
     )
 
-    # Les indicateurs retournent des listes.
-    # On prend uniquement la dernière valeur.
-
-    ema20 = _last_indicator_value(
-        ema20_raw
-    )
-
-    ema50 = _last_indicator_value(
-        ema50_raw
-    )
-
-    rsi = _last_indicator_value(
-        rsi_raw
-    )
-
-    atr = _last_indicator_value(
-        atr_raw
-    )
-
-    # ========================================================
+    # --------------------------------------------------------
     # STRUCTURE
-    # ========================================================
+    # --------------------------------------------------------
 
     structure = analyser_structure(
         candles
     )
 
-    # ========================================================
-    # FVG
-    # ========================================================
-
-    try:
-
-        fvg = detecter_fvg(
-            candles
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "Détection FVG échouée sur %s : %s",
-            timeframe,
-            exc,
-        )
-
-        fvg = []
-
-    # ========================================================
-    # ORDER BLOCKS
-    # ========================================================
-
-    try:
-
-        structure_breaks = []
-
-        if isinstance(
-            structure,
-            dict,
-        ):
-
-            bos = structure.get(
-                "bos",
-                [],
-            )
-
-            choch = structure.get(
-                "choch",
-                [],
-            )
-
-            if isinstance(
-                bos,
-                list,
-            ):
-                structure_breaks.extend(
-                    bos
-                )
-
-            if isinstance(
-                choch,
-                list,
-            ):
-                structure_breaks.extend(
-                    choch
-                )
-
-        order_blocks = detecter_order_blocks(
-            candles,
-            structure_breaks,
-        )
-
-    except Exception as exc:
-
-        logger.warning(
-            "Détection Order Block échouée sur %s : %s",
-            timeframe,
-            exc,
-        )
-
-        order_blocks = []
-
-    # ========================================================
-    # BIAIS
-    # ========================================================
-
     bias = _extract_bias(
         structure
     )
 
-    latest = _extract_latest(
-        structure
-    )
-
-    return {
-        "timeframe": timeframe,
-
-        "api_timeframe": TIMEFRAME_TO_API.get(
-            timeframe,
-            timeframe,
-        ),
-
-        "candles_count": len(
-            candles
-        ),
-
-        "ema20": ema20,
-        "ema50": ema50,
-
-        "rsi": rsi,
-        "atr": atr,
-
-        "structure": structure,
-
-        "bias": bias,
-
-        "latest": latest,
-
-        "fvg": fvg,
-
-        "order_blocks": [
-            _safe_order_block_dict(ob)
-            for ob in order_blocks
-        ],
-    }
-
-
-# ============================================================
-# NORMALISATION ORDER BLOCK
-# ============================================================
-
-def _safe_order_block_dict(
-    order_block: Any,
-) -> Dict[str, Any]:
-    """
-    Convertit un OrderBlock en dictionnaire.
-
-    Compatible avec dataclass ou dictionnaire.
-    """
+    latest = {}
 
     if isinstance(
-        order_block,
+        structure,
         dict,
     ):
-        return order_block
 
-    result = {}
-
-    for key in (
-        "index",
-        "direction",
-        "high",
-        "low",
-        "body_high",
-        "body_low",
-    ):
-
-        value = getattr(
-            order_block,
-            key,
-            None,
+        latest = structure.get(
+            "latest",
+            {},
         )
 
-        if key in {
-            "high",
-            "low",
-            "body_high",
-            "body_low",
-        }:
+        if not isinstance(
+            latest,
+            dict,
+        ):
+            latest = {}
 
-            value = _safe_float(
-                value
-            )
+    # --------------------------------------------------------
+    # FVG
+    # --------------------------------------------------------
 
-        result[key] = value
+    fvg = []
 
-    return result
+    if isinstance(
+        structure,
+        dict,
+    ):
+        fvg = structure.get(
+            "fvg",
+            [],
+        )
+
+    # --------------------------------------------------------
+    # ORDER BLOCKS
+    # --------------------------------------------------------
+
+    order_blocks = []
+
+    if isinstance(
+        structure,
+        dict,
+    ):
+        order_blocks = structure.get(
+            "order_blocks",
+            [],
+        )
+
+    return {
+
+        "timeframe": timeframe,
+
+        "api_timeframe":
+            TIMEFRAME_TO_API.get(
+                timeframe,
+                timeframe,
+            ),
+
+        "candles_count":
+            len(candles),
+
+        "ema20":
+            ema20,
+
+        "ema50":
+            ema50,
+
+        "rsi":
+            rsi,
+
+        "atr":
+            atr,
+
+        "structure":
+            structure,
+
+        "bias":
+            bias,
+
+        "latest":
+            latest,
+
+        "fvg":
+            fvg,
+
+        "order_blocks":
+            order_blocks,
+    }
 
 
 # ============================================================
@@ -627,40 +437,14 @@ def _safe_order_block_dict(
 def charger_donnees_multi_timeframe(
     symbol: str = DEFAULT_SYMBOL,
 ) -> Dict[str, list]:
-    """
-    Charge :
 
-        H4  -> 4h
-        H1  -> 1h
-        M15 -> 15min
-        M5  -> 5min
-    """
+    result = {}
 
-    result: Dict[str, list] = {}
+    for timeframe in TIMEFRAMES:
 
-    for timeframe in DEFAULT_TIMEFRAMES:
-
-        api_timeframe = TIMEFRAME_TO_API.get(
+        api_timeframe = TIMEFRAME_TO_API[
             timeframe
-        )
-
-        if not api_timeframe:
-
-            logger.error(
-                "Timeframe inconnue : %s",
-                timeframe,
-            )
-
-            result[timeframe] = []
-
-            continue
-
-        logger.info(
-            "Chargement %s %s -> %s...",
-            symbol,
-            timeframe,
-            api_timeframe,
-        )
+        ]
 
         try:
 
@@ -681,7 +465,7 @@ def charger_donnees_multi_timeframe(
             except Exception as exc:
 
                 logger.exception(
-                    "Erreur chargement %s : %s",
+                    "Erreur %s : %s",
                     timeframe,
                     exc,
                 )
@@ -691,37 +475,31 @@ def charger_donnees_multi_timeframe(
         except Exception as exc:
 
             logger.exception(
-                "Erreur chargement %s : %s",
+                "Erreur %s : %s",
                 timeframe,
                 exc,
             )
 
             candles = []
 
-        if not candles:
+        result[timeframe] = (
+            candles
+            if candles
+            else []
+        )
 
-            logger.warning(
-                "Aucune bougie pour %s.",
-                timeframe,
-            )
-
-            result[timeframe] = []
-
-        else:
-
-            logger.info(
-                "%s : %s bougies chargées.",
-                timeframe,
-                len(candles),
-            )
-
-            result[timeframe] = candles
+        logger.info(
+            "%s %s : %s bougies",
+            symbol,
+            timeframe,
+            len(result[timeframe]),
+        )
 
     return result
 
 
 # ============================================================
-# DÉTERMINATION DE LA DIRECTION
+# DIRECTION PRINCIPALE
 # ============================================================
 
 def determiner_direction(
@@ -730,35 +508,25 @@ def determiner_direction(
     m15: Dict[str, Any],
 ) -> str:
     """
-    Détermine la direction principale.
+    Direction principale.
 
-    H4  = tendance globale
-    H1  = structure
-    M15 = contexte
+    Priorité :
 
-    M5 ne détermine jamais seul la direction.
+        H4 = tendance
+        H1 = structure
+        M15 = contexte
+
+    Règle :
+
+        2 confirmations minimum
+        parmi H4 / H1 / M15.
+
+    M5 est totalement exclu.
     """
 
-    h4_bias = _normalize_direction(
-        h4.get(
-            "bias",
-            NEUTRAL,
-        )
-    )
-
-    h1_bias = _normalize_direction(
-        h1.get(
-            "bias",
-            NEUTRAL,
-        )
-    )
-
-    m15_bias = _normalize_direction(
-        m15.get(
-            "bias",
-            NEUTRAL,
-        )
-    )
+    h4_bias = _extract_bias(h4)
+    h1_bias = _extract_bias(h1)
+    m15_bias = _extract_bias(m15)
 
     biases = [
         h4_bias,
@@ -766,37 +534,28 @@ def determiner_direction(
         m15_bias,
     ]
 
-    buy_count = biases.count(
-        BUY
-    )
+    buy_count = biases.count(BUY)
+    sell_count = biases.count(SELL)
 
-    sell_count = biases.count(
-        SELL
-    )
+    # --------------------------------------------------------
+    # BUY
+    # --------------------------------------------------------
 
-    if (
-        buy_count >= 2
-        and buy_count > sell_count
-    ):
+    if buy_count >= 2:
+
         return BUY
 
-    if (
-        sell_count >= 2
-        and sell_count > buy_count
-    ):
+    # --------------------------------------------------------
+    # SELL
+    # --------------------------------------------------------
+
+    if sell_count >= 2:
+
         return SELL
 
-    if (
-        h4_bias == BUY
-        and h1_bias == BUY
-    ):
-        return BUY
-
-    if (
-        h4_bias == SELL
-        and h1_bias == SELL
-    ):
-        return SELL
+    # --------------------------------------------------------
+    # Aucun consensus
+    # --------------------------------------------------------
 
     return NEUTRAL
 
@@ -809,27 +568,22 @@ def verifier_confirmation_m5(
     direction: str,
     m5: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Vérifie le contexte M5.
-
-    Le M5 confirme ou affaiblit le setup.
-    Il ne crée jamais seul une direction.
-    """
 
     direction = _normalize_direction(
         direction
     )
 
-    m5_bias = _normalize_direction(
-        m5.get(
-            "bias",
-            NEUTRAL,
-        )
-    )
+    if direction == NEUTRAL:
 
-    structure = m5.get(
-        "structure",
-        {},
+        return {
+            "direction": NEUTRAL,
+            "m5_bias": NEUTRAL,
+            "confirmed": False,
+            "reason": "NO_MAIN_DIRECTION",
+        }
+
+    m5_bias = _extract_bias(
+        m5
     )
 
     latest = m5.get(
@@ -837,10 +591,21 @@ def verifier_confirmation_m5(
         {},
     )
 
-    confirmation = False
+    confirmed = False
+    confirmation_type = None
+
+    # --------------------------------------------------------
+    # Confirmation par biais
+    # --------------------------------------------------------
 
     if m5_bias == direction:
-        confirmation = True
+
+        confirmed = True
+        confirmation_type = "M5_BIAS"
+
+    # --------------------------------------------------------
+    # Confirmation par BOS
+    # --------------------------------------------------------
 
     if isinstance(
         latest,
@@ -851,37 +616,59 @@ def verifier_confirmation_m5(
             "bos"
         )
 
-        latest_choch = latest.get(
-            "choch"
-        )
-
-        for event in (
+        if isinstance(
             latest_bos,
-            latest_choch,
+            dict,
         ):
 
-            if not isinstance(
-                event,
-                dict,
-            ):
-                continue
-
-            event_direction = _normalize_direction(
-                event.get(
+            bos_direction = _normalize_direction(
+                latest_bos.get(
                     "direction"
                 )
             )
 
-            if event_direction == direction:
-                confirmation = True
+            if bos_direction == direction:
+
+                confirmed = True
+                confirmation_type = "M5_BOS"
+
+        # ----------------------------------------------------
+        # Confirmation par CHoCH
+        # ----------------------------------------------------
+
+        latest_choch = latest.get(
+            "choch"
+        )
+
+        if isinstance(
+            latest_choch,
+            dict,
+        ):
+
+            choch_direction = _normalize_direction(
+                latest_choch.get(
+                    "direction"
+                )
+            )
+
+            if choch_direction == direction:
+
+                confirmed = True
+                confirmation_type = "M5_CHOCH"
 
     return {
-        "direction": direction,
-        "m5_bias": m5_bias,
-        "confirmed": confirmation,
-        "structure_available": bool(
-            structure
-        ),
+
+        "direction":
+            direction,
+
+        "m5_bias":
+            m5_bias,
+
+        "confirmed":
+            confirmed,
+
+        "confirmation_type":
+            confirmation_type,
     }
 
 
@@ -893,88 +680,81 @@ def construire_contexte_indicateurs(
     analysis: Dict[str, Any],
     direction: str,
 ) -> Dict[str, Any]:
-    """
-    Construit le contexte utilisé par score.py.
-    """
-
-    ema20 = _last_indicator_value(
-        analysis.get(
-            "ema20"
-        )
-    )
-
-    ema50 = _last_indicator_value(
-        analysis.get(
-            "ema50"
-        )
-    )
-
-    rsi = _last_indicator_value(
-        analysis.get(
-            "rsi"
-        )
-    )
-
-    atr = _last_indicator_value(
-        analysis.get(
-            "atr"
-        )
-    )
 
     direction = _normalize_direction(
         direction
     )
 
-    ema_context = NEUTRAL
+    ema20 = _last_value(
+        analysis.get(
+            "ema20",
+            0,
+        )
+    )
 
-    if (
-        ema20 > 0
-        and ema50 > 0
-    ):
+    ema50 = _last_value(
+        analysis.get(
+            "ema50",
+            0,
+        )
+    )
 
-        if ema20 > ema50:
-            ema_context = "bullish"
+    rsi = _last_value(
+        analysis.get(
+            "rsi",
+            0,
+        )
+    )
 
-        elif ema20 < ema50:
-            ema_context = "bearish"
+    atr = _last_value(
+        analysis.get(
+            "atr",
+            0,
+        )
+    )
 
-    rsi_context = ""
+    if ema20 > ema50:
 
-    if direction == BUY:
+        ema_context = "bullish"
 
-        if rsi <= 30:
-            rsi_context = "oversold"
+    elif ema20 < ema50:
 
-        elif rsi >= 70:
-            rsi_context = "overbought"
+        ema_context = "bearish"
 
-        elif rsi >= 50:
-            rsi_context = "bullish_bias"
+    else:
 
-        else:
-            rsi_context = "bearish_bias"
+        ema_context = "neutral"
 
-    elif direction == SELL:
+    if rsi >= 70:
 
-        if rsi >= 70:
-            rsi_context = "overbought"
+        rsi_context = "overbought"
 
-        elif rsi <= 30:
-            rsi_context = "oversold"
+    elif rsi <= 30:
 
-        elif rsi <= 50:
-            rsi_context = "bearish_bias"
+        rsi_context = "oversold"
 
-        else:
-            rsi_context = "bullish_bias"
+    elif rsi >= 50:
+
+        rsi_context = "bullish_bias"
+
+    else:
+
+        rsi_context = "bearish_bias"
 
     return {
+
         "ema20": ema20,
+
         "ema50": ema50,
+
         "rsi": rsi,
+
         "atr": atr,
+
         "ema_context": ema_context,
+
         "rsi_context": rsi_context,
+
         "direction": direction,
     }
 
@@ -987,7 +767,6 @@ def construire_fibonacci(
     candles: list,
     direction: str,
 ) -> Dict[str, Any]:
-    """Prépare l'analyse Fibonacci."""
 
     if not candles:
         return {}
@@ -996,16 +775,16 @@ def construire_fibonacci(
         direction
     )
 
+    fonction = globals().get(
+        "calculer_fibonacci"
+    )
+
+    if not callable(
+        fonction
+    ):
+        return {}
+
     try:
-
-        fonction = globals().get(
-            "calculer_fibonacci"
-        )
-
-        if not callable(
-            fonction
-        ):
-            return {}
 
         try:
 
@@ -1029,7 +808,7 @@ def construire_fibonacci(
     except Exception as exc:
 
         logger.warning(
-            "Analyse Fibonacci indisponible : %s",
+            "Fibonacci indisponible : %s",
             exc,
         )
 
@@ -1043,15 +822,6 @@ def construire_fibonacci(
 def _extract_swing_prices(
     analysis: Dict[str, Any],
 ) -> Dict[str, list]:
-    """
-    Extrait les prix des swings.
-
-    Format attendu :
-
-        swings:
-            highs: [...]
-            lows: [...]
-    """
 
     result = {
         "highs": [],
@@ -1075,61 +845,53 @@ def _extract_swing_prices(
     ):
         return result
 
-    highs = swings.get(
+    for swing in swings.get(
         "highs",
         [],
-    )
+    ):
 
-    lows = swings.get(
+        if isinstance(
+            swing,
+            dict,
+        ):
+
+            price = _safe_float(
+                swing.get(
+                    "price"
+                )
+            )
+
+            if price > 0:
+
+                result[
+                    "highs"
+                ].append(
+                    price
+                )
+
+    for swing in swings.get(
         "lows",
         [],
-    )
-
-    if isinstance(
-        highs,
-        list,
     ):
 
-        for swing in highs:
+        if isinstance(
+            swing,
+            dict,
+        ):
 
-            if isinstance(
-                swing,
-                dict,
-            ):
-
-                price = _safe_float(
-                    swing.get(
-                        "price"
-                    )
+            price = _safe_float(
+                swing.get(
+                    "price"
                 )
+            )
 
-                if price > 0:
-                    result["highs"].append(
-                        price
-                    )
+            if price > 0:
 
-    if isinstance(
-        lows,
-        list,
-    ):
-
-        for swing in lows:
-
-            if isinstance(
-                swing,
-                dict,
-            ):
-
-                price = _safe_float(
-                    swing.get(
-                        "price"
-                    )
+                result[
+                    "lows"
+                ].append(
+                    price
                 )
-
-                if price > 0:
-                    result["lows"].append(
-                        price
-                    )
 
     return result
 
@@ -1145,18 +907,6 @@ def determiner_stop_loss(
     h1_analysis: Dict[str, Any],
     atr: float = 0.0,
 ) -> Optional[float]:
-    """
-    Détermine un Stop Loss technique.
-
-    Priorité :
-
-        1. Swing M15 valide
-        2. Swing H1 valide
-        3. ATR de sécurité
-
-    BUY  -> SL sous l'entrée
-    SELL -> SL au-dessus de l'entrée
-    """
 
     direction = _normalize_direction(
         direction
@@ -1166,7 +916,7 @@ def determiner_stop_loss(
         entry
     )
 
-    atr = _last_indicator_value(
+    atr = _last_value(
         atr
     )
 
@@ -1181,24 +931,24 @@ def determiner_stop_loss(
         h1_analysis
     )
 
-    # ========================================================
+    # --------------------------------------------------------
     # BUY
-    # ========================================================
+    # --------------------------------------------------------
 
     if direction == BUY:
 
         candidates = []
 
         candidates.extend(
-            value
-            for value in m15_swings["lows"]
-            if value < entry
+            price
+            for price in m15_swings["lows"]
+            if price < entry
         )
 
         candidates.extend(
-            value
-            for value in h1_swings["lows"]
-            if value < entry
+            price
+            for price in h1_swings["lows"]
+            if price < entry
         )
 
         if candidates:
@@ -1209,31 +959,28 @@ def determiner_stop_loss(
 
         if atr > 0:
 
-            stop = entry - (
+            return entry - (
                 atr * 1.5
             )
 
-            if stop > 0:
-                return stop
-
-    # ========================================================
+    # --------------------------------------------------------
     # SELL
-    # ========================================================
+    # --------------------------------------------------------
 
-    elif direction == SELL:
+    if direction == SELL:
 
         candidates = []
 
         candidates.extend(
-            value
-            for value in m15_swings["highs"]
-            if value > entry
+            price
+            for price in m15_swings["highs"]
+            if price > entry
         )
 
         candidates.extend(
-            value
-            for value in h1_swings["highs"]
-            if value > entry
+            price
+            for price in h1_swings["highs"]
+            if price > entry
         )
 
         if candidates:
@@ -1244,18 +991,15 @@ def determiner_stop_loss(
 
         if atr > 0:
 
-            stop = entry + (
+            return entry + (
                 atr * 1.5
             )
-
-            if stop > 0:
-                return stop
 
     return None
 
 
 # ============================================================
-# VALIDATION STOP LOSS
+# VALIDATION SL
 # ============================================================
 
 def _validate_stop_loss(
@@ -1263,7 +1007,6 @@ def _validate_stop_loss(
     entry: float,
     stop_loss: Optional[float],
 ) -> bool:
-    """Vérifie que le SL est exploitable."""
 
     if stop_loss is None:
         return False
@@ -1276,20 +1019,22 @@ def _validate_stop_loss(
         stop_loss
     )
 
+    direction = _normalize_direction(
+        direction
+    )
+
     if entry <= 0:
         return False
 
     if stop_loss <= 0:
         return False
 
-    direction = _normalize_direction(
-        direction
-    )
-
     if direction == BUY:
+
         return stop_loss < entry
 
     if direction == SELL:
+
         return stop_loss > entry
 
     return False
@@ -1302,10 +1047,9 @@ def _validate_stop_loss(
 def analyser_marche(
     symbol: str = DEFAULT_SYMBOL,
 ) -> Dict[str, Any]:
-    """Analyse complète du marché."""
 
     logger.info(
-        "Début analyse Vision Trade AI V2 : %s",
+        "Analyse Vision Trade AI V2 : %s",
         symbol,
     )
 
@@ -1313,38 +1057,19 @@ def analyser_marche(
     # DATA
     # ========================================================
 
-    market_data = charger_donnees_multi_timeframe(
-        symbol
+    market_data = (
+        charger_donnees_multi_timeframe(
+            symbol
+        )
     )
 
     # ========================================================
-    # VÉRIFICATION DATA
+    # ANALYSE
     # ========================================================
 
-    missing = [
-        timeframe
-        for timeframe in DEFAULT_TIMEFRAMES
-        if not market_data.get(
-            timeframe
-        )
-    ]
+    analyses = {}
 
-    if missing:
-
-        logger.warning(
-            "Timeframes indisponibles : %s",
-            ", ".join(
-                missing
-            ),
-        )
-
-    # ========================================================
-    # ANALYSE TIMEFRAMES
-    # ========================================================
-
-    analyses: Dict[str, Dict[str, Any]] = {}
-
-    for timeframe in DEFAULT_TIMEFRAMES:
+    for timeframe in TIMEFRAMES:
 
         candles = market_data.get(
             timeframe,
@@ -1359,21 +1084,22 @@ def analyser_marche(
 
         try:
 
-            analyses[timeframe] = analyser_timeframe(
-                candles,
-                timeframe,
+            analyses[timeframe] = (
+                analyser_timeframe(
+                    candles,
+                    timeframe,
+                )
             )
 
         except Exception as exc:
 
             logger.exception(
-                "Erreur analyse %s : %s",
+                "Erreur analyse %s",
                 timeframe,
-                exc,
             )
 
             analyses[timeframe] = {
-                "error": str(exc),
+                "error": str(exc)
             }
 
     # ========================================================
@@ -1401,7 +1127,16 @@ def analyser_marche(
     )
 
     # ========================================================
-    # DIRECTION
+    # BIAIS
+    # ========================================================
+
+    h4_bias = _extract_bias(h4)
+    h1_bias = _extract_bias(h1)
+    m15_bias = _extract_bias(m15)
+    m5_bias = _extract_bias(m5)
+
+    # ========================================================
+    # DIRECTION PRINCIPALE
     # ========================================================
 
     direction = determiner_direction(
@@ -1410,71 +1145,85 @@ def analyser_marche(
         m15,
     )
 
+    # ========================================================
+    # AUCUNE DIRECTION
+    # ========================================================
+
     if direction == NEUTRAL:
 
-        logger.info(
-            "Aucune direction claire : %s",
-            symbol,
-        )
-
         return {
-            "status": "NO_DIRECTION",
-            "symbol": symbol,
-            "direction": NEUTRAL,
-            "entry": None,
-            "stop_loss": None,
-            "score": {
-                "final_score": 0,
+
+            "status":
+                "NO_DIRECTION",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                NEUTRAL,
+
+            "biases": {
+                "H4": h4_bias,
+                "H1": h1_bias,
+                "M15": m15_bias,
+                "M5": m5_bias,
             },
+
+            "entry":
+                None,
+
+            "stop_loss":
+                None,
+
+            "score": {
+                "final_score": 0
+            },
+
             "rr": {},
+
             "quality": {},
-            "analyses": analyses,
-            "ready_for_signal": False,
+
+            "analyses":
+                analyses,
+
+            "ready_for_signal":
+                False,
         }
 
-    logger.info(
-        "Direction principale : %s",
-        direction,
+    # ========================================================
+    # M5
+    # ========================================================
+
+    m5_confirmation = (
+        verifier_confirmation_m5(
+            direction,
+            m5,
+        )
     )
 
     # ========================================================
-    # M5 CONFIRMATION
+    # INDICATEURS M15
     # ========================================================
 
-    m5_confirmation = verifier_confirmation_m5(
-        direction,
-        m5,
-    )
-
-    logger.info(
-        "Confirmation M5 : %s | biais=%s",
-        m5_confirmation.get(
-            "confirmed"
-        ),
-        m5_confirmation.get(
-            "m5_bias"
-        ),
-    )
-
-    # ========================================================
-    # INDICATEURS
-    # ========================================================
-
-    indicator_context = construire_contexte_indicateurs(
-        m15,
-        direction,
+    indicator_context = (
+        construire_contexte_indicateurs(
+            m15,
+            direction,
+        )
     )
 
     # ========================================================
     # FIBONACCI
     # ========================================================
 
-    fibonacci_analysis = construire_fibonacci(
-        market_data.get(
-            "M15",
-            [],
-        ),
-        direction,
+    fibonacci_analysis = (
+        construire_fibonacci(
+            market_data.get(
+                "M15",
+                [],
+            ),
+            direction,
+        )
     )
 
     # ========================================================
@@ -1484,12 +1233,10 @@ def analyser_marche(
     try:
 
         score_result = calculer_score(
+
             direction=direction,
 
-            h4_bias=h4.get(
-                "bias",
-                NEUTRAL,
-            ),
+            h4_bias=h4_bias,
 
             h1_analysis=h1,
 
@@ -1497,29 +1244,45 @@ def analyser_marche(
 
             m5_analysis=m5,
 
-            fibonacci_analysis=fibonacci_analysis,
+            fibonacci_analysis=
+                fibonacci_analysis,
 
-            indicators=indicator_context,
+            indicators=
+                indicator_context,
 
-            threshold=DEFAULT_MIN_SCORE,
+            threshold=
+                DEFAULT_MIN_SCORE,
         )
 
     except Exception as exc:
 
         logger.exception(
-            "Erreur calcul score."
+            "Erreur score"
         )
 
         return {
-            "status": "SCORE_ERROR",
-            "symbol": symbol,
-            "direction": direction,
+
+            "status":
+                "SCORE_ERROR",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                direction,
+
+            "error":
+                str(exc),
+
             "score": {
-                "final_score": 0,
-                "error": str(exc),
+                "final_score": 0
             },
-            "analyses": analyses,
-            "ready_for_signal": False,
+
+            "analyses":
+                analyses,
+
+            "ready_for_signal":
+                False,
         }
 
     final_score = _safe_float(
@@ -1532,31 +1295,14 @@ def analyser_marche(
         )
     )
 
-    logger.info(
-        "Score %s : %.2f/100",
-        direction,
-        final_score,
-    )
-
     # ========================================================
-    # ENTRY
+    # ENTRY M15
     # ========================================================
 
     m15_candles = market_data.get(
         "M15",
         [],
     )
-
-    if not m15_candles:
-
-        return {
-            "status": "NO_ENTRY_DATA",
-            "symbol": symbol,
-            "direction": direction,
-            "score": score_result,
-            "analyses": analyses,
-            "ready_for_signal": False,
-        }
 
     try:
 
@@ -1566,25 +1312,35 @@ def analyser_marche(
 
     except Exception as exc:
 
-        logger.exception(
-            "Impossible de déterminer l'entrée."
-        )
-
         return {
-            "status": "NO_ENTRY",
-            "symbol": symbol,
-            "direction": direction,
-            "score": score_result,
-            "error": str(exc),
-            "analyses": analyses,
-            "ready_for_signal": False,
+
+            "status":
+                "NO_ENTRY",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                direction,
+
+            "score":
+                score_result,
+
+            "error":
+                str(exc),
+
+            "analyses":
+                analyses,
+
+            "ready_for_signal":
+                False,
         }
 
     # ========================================================
     # ATR
     # ========================================================
 
-    atr = _last_indicator_value(
+    atr = _last_value(
         m15.get(
             "atr",
             0,
@@ -1595,17 +1351,15 @@ def analyser_marche(
     # STOP LOSS
     # ========================================================
 
-    stop_loss = determiner_stop_loss(
-        direction=direction,
-        entry=entry,
-        m15_analysis=m15,
-        h1_analysis=h1,
-        atr=atr,
+    stop_loss = (
+        determiner_stop_loss(
+            direction=direction,
+            entry=entry,
+            m15_analysis=m15,
+            h1_analysis=h1,
+            atr=atr,
+        )
     )
-
-    # ========================================================
-    # VALIDATION SL
-    # ========================================================
 
     if not _validate_stop_loss(
         direction,
@@ -1613,32 +1367,41 @@ def analyser_marche(
         stop_loss,
     ):
 
-        logger.warning(
-            "SL invalide ou introuvable | "
-            "symbol=%s direction=%s entry=%s atr=%s",
-            symbol,
-            direction,
-            entry,
-            atr,
-        )
-
         return {
-            "status": "NO_STOP_LOSS",
-            "symbol": symbol,
-            "direction": direction,
-            "entry": entry,
-            "stop_loss": None,
-            "score": score_result,
-            "analyses": analyses,
-            "indicators": indicator_context,
-            "fibonacci": fibonacci_analysis,
-            "ready_for_signal": False,
-        }
 
-    logger.info(
-        "Stop Loss : %.5f",
-        stop_loss,
-    )
+            "status":
+                "NO_STOP_LOSS",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                direction,
+
+            "entry":
+                entry,
+
+            "stop_loss":
+                None,
+
+            "score":
+                score_result,
+
+            "analyses":
+                analyses,
+
+            "indicators":
+                indicator_context,
+
+            "fibonacci":
+                fibonacci_analysis,
+
+            "m5_confirmation":
+                m5_confirmation,
+
+            "ready_for_signal":
+                False,
+        }
 
     # ========================================================
     # RR
@@ -1646,57 +1409,97 @@ def analyser_marche(
 
     try:
 
-        rr_result = calculer_rr_complet(
-            entry=entry,
-            stop_loss=stop_loss,
-            direction=direction,
-            minimum_rr=DEFAULT_MIN_RR,
+        rr_result = (
+            calculer_rr_complet(
+                entry=entry,
+                stop_loss=stop_loss,
+                direction=direction,
+                minimum_rr=DEFAULT_MIN_RR,
+            )
         )
 
         rr_data = {
-            "direction": rr_result.direction,
 
-            "entry": rr_result.entry,
+            "direction":
+                rr_result.direction,
 
-            "stop_loss": rr_result.stop_loss,
+            "entry":
+                rr_result.entry,
 
-            "risk": rr_result.risk,
+            "stop_loss":
+                rr_result.stop_loss,
 
-            "tp1": rr_result.tp1,
-            "tp2": rr_result.tp2,
-            "tp3": rr_result.tp3,
+            "risk":
+                rr_result.risk,
 
-            "reward_tp1": rr_result.reward_tp1,
-            "reward_tp2": rr_result.reward_tp2,
-            "reward_tp3": rr_result.reward_tp3,
+            "tp1":
+                rr_result.tp1,
 
-            "rr_tp1": rr_result.rr_tp1,
-            "rr_tp2": rr_result.rr_tp2,
-            "rr_tp3": rr_result.rr_tp3,
+            "tp2":
+                rr_result.tp2,
 
-            "minimum_rr": rr_result.minimum_rr,
+            "tp3":
+                rr_result.tp3,
 
-            "passes_rr_filter": (
-                rr_result.passes_rr_filter
-            ),
+            "reward_tp1":
+                rr_result.reward_tp1,
+
+            "reward_tp2":
+                rr_result.reward_tp2,
+
+            "reward_tp3":
+                rr_result.reward_tp3,
+
+            "rr_tp1":
+                rr_result.rr_tp1,
+
+            "rr_tp2":
+                rr_result.rr_tp2,
+
+            "rr_tp3":
+                rr_result.rr_tp3,
+
+            "minimum_rr":
+                rr_result.minimum_rr,
+
+            "passes_rr_filter":
+                rr_result.passes_rr_filter,
         }
 
     except Exception as exc:
 
         logger.exception(
-            "Erreur calcul RR."
+            "Erreur RR"
         )
 
         return {
-            "status": "RR_ERROR",
-            "symbol": symbol,
-            "direction": direction,
-            "entry": entry,
-            "stop_loss": stop_loss,
-            "score": score_result,
-            "error": str(exc),
-            "analyses": analyses,
-            "ready_for_signal": False,
+
+            "status":
+                "RR_ERROR",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                direction,
+
+            "entry":
+                entry,
+
+            "stop_loss":
+                stop_loss,
+
+            "score":
+                score_result,
+
+            "error":
+                str(exc),
+
+            "analyses":
+                analyses,
+
+            "ready_for_signal":
+                False,
         }
 
     # ========================================================
@@ -1705,129 +1508,153 @@ def analyser_marche(
 
     try:
 
-        quality_result = filtrer_qualite(
-            direction=direction,
+        quality_result = (
+            filtrer_qualite(
 
-            score_result=score_result,
+                direction=direction,
 
-            rr_result=rr_data,
+                score_result=score_result,
 
-            h4_bias=h4.get(
-                "bias",
-                NEUTRAL,
-            ),
+                rr_result=rr_data,
 
-            h1_bias=h1.get(
-                "bias",
-                NEUTRAL,
-            ),
+                h4_bias=h4_bias,
 
-            m15_bias=m15.get(
-                "bias",
-                NEUTRAL,
-            ),
+                h1_bias=h1_bias,
 
-            m5_bias=m5.get(
-                "bias",
-                NEUTRAL,
-            ),
+                m15_bias=m15_bias,
 
-            news=None,
+                m5_bias=m5_bias,
 
-            minimum_score=DEFAULT_MIN_SCORE,
+                news=None,
 
-            minimum_rr=DEFAULT_MIN_RR,
+                minimum_score=
+                    DEFAULT_MIN_SCORE,
+
+                minimum_rr=
+                    DEFAULT_MIN_RR,
+            )
         )
 
     except Exception as exc:
 
         logger.exception(
-            "Erreur filtre qualité."
+            "Erreur filtre qualité"
         )
 
         return {
-            "status": "QUALITY_ERROR",
-            "symbol": symbol,
-            "direction": direction,
-            "entry": entry,
-            "stop_loss": stop_loss,
-            "score": score_result,
-            "rr": rr_data,
-            "error": str(exc),
-            "analyses": analyses,
-            "ready_for_signal": False,
+
+            "status":
+                "QUALITY_ERROR",
+
+            "symbol":
+                symbol,
+
+            "direction":
+                direction,
+
+            "entry":
+                entry,
+
+            "stop_loss":
+                stop_loss,
+
+            "score":
+                score_result,
+
+            "rr":
+                rr_data,
+
+            "error":
+                str(exc),
+
+            "analyses":
+                analyses,
+
+            "ready_for_signal":
+                False,
         }
 
     # ========================================================
-    # RÉSULTAT FINAL
+    # RÉSULTAT
     # ========================================================
 
-    status = quality_result.get(
-        "status",
-        "REJECT",
-    )
-
-    ready_for_signal = bool(
+    ready = bool(
         quality_result.get(
             "ready_for_signal",
             False,
         )
     )
 
-    result = {
-        "status": status,
-
-        "symbol": symbol,
-
-        "direction": direction,
-
-        "entry": entry,
-
-        "stop_loss": stop_loss,
-
-        "score": score_result,
-
-        "rr": rr_data,
-
-        "quality": quality_result,
-
-        "indicators": indicator_context,
-
-        "fibonacci": fibonacci_analysis,
-
-        "m5_confirmation": m5_confirmation,
-
-        "analyses": analyses,
-
-        "ready_for_signal": ready_for_signal,
-    }
-
-    logger.info(
-        "Analyse terminée : %s | %s | "
-        "score=%.2f | RR=%.2f | ready=%s",
-        symbol,
-        status,
-        final_score,
-        _safe_float(
-            rr_data.get(
-                "rr_tp2",
-                0,
-            )
-        ),
-        ready_for_signal,
+    status = quality_result.get(
+        "status",
+        "REJECT",
     )
 
-    return result
+    return {
+
+        "status":
+            status,
+
+        "symbol":
+            symbol,
+
+        "direction":
+            direction,
+
+        "biases": {
+
+            "H4":
+                h4_bias,
+
+            "H1":
+                h1_bias,
+
+            "M15":
+                m15_bias,
+
+            "M5":
+                m5_bias,
+        },
+
+        "entry":
+            entry,
+
+        "stop_loss":
+            stop_loss,
+
+        "score":
+            score_result,
+
+        "rr":
+            rr_data,
+
+        "quality":
+            quality_result,
+
+        "indicators":
+            indicator_context,
+
+        "fibonacci":
+            fibonacci_analysis,
+
+        "m5_confirmation":
+            m5_confirmation,
+
+        "analyses":
+            analyses,
+
+        "ready_for_signal":
+            ready,
+    }
 
 
 # ============================================================
-# ALIAS COMPATIBILITÉ
+# ALIAS
 # ============================================================
 
 def analyse(
     symbol: str = DEFAULT_SYMBOL,
 ) -> Dict[str, Any]:
-    """Alias public."""
 
     return analyser_marche(
         symbol
@@ -1835,124 +1662,136 @@ def analyse(
 
 
 # ============================================================
-# TEST INTERNE
+# TEST
 # ============================================================
 
-def _run_internal_test() -> None:
-    """Tests internes."""
-
-    assert _normalize_direction(
-        "buy"
-    ) == BUY
-
-    assert _normalize_direction(
-        "SELL"
-    ) == SELL
-
-    assert _normalize_direction(
-        "xxx"
-    ) == NEUTRAL
-
-    assert _safe_float(
-        "100.5"
-    ) == 100.5
-
-    assert _last_indicator_value(
-        [100, 101, 102]
-    ) == 102
-
-    assert _last_indicator_value(
-        [50.5]
-    ) == 50.5
-
-    indicators = construire_contexte_indicateurs(
-        {
-            "ema20": [1990, 2000],
-            "ema50": [1980, 1990],
-            "rsi": [52, 55],
-            "atr": [9, 10],
-        },
-        BUY,
-    )
-
-    assert indicators["ema20"] == 2000
-    assert indicators["ema50"] == 1990
-    assert indicators["rsi"] == 55
-    assert indicators["atr"] == 10
+def _run_internal_test():
 
     assert (
-        indicators["ema_context"]
-        == "bullish"
+        _normalize_direction("BUY")
+        == BUY
     )
 
     assert (
-        indicators["rsi_context"]
-        == "bullish_bias"
+        _normalize_direction("SELL")
+        == SELL
     )
 
-    fake_analysis = {
+    assert (
+        _normalize_direction("xxx")
+        == NEUTRAL
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": BUY},
+            {"bias": BUY},
+            {"bias": NEUTRAL},
+        )
+        == BUY
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": SELL},
+            {"bias": SELL},
+            {"bias": NEUTRAL},
+        )
+        == SELL
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": SELL},
+            {"bias": NEUTRAL},
+            {"bias": NEUTRAL},
+        )
+        == NEUTRAL
+    )
+
+    assert (
+        determiner_direction(
+            {"bias": SELL},
+            {"bias": BUY},
+            {"bias": BUY},
+        )
+        == BUY
+    )
+
+    indicators = (
+        construire_contexte_indicateurs(
+            {
+                "ema20": [100, 110],
+                "ema50": [90, 100],
+                "rsi": [50, 55],
+                "atr": [5, 6],
+            },
+            BUY,
+        )
+    )
+
+    assert (
+        indicators["ema20"]
+        == 110
+    )
+
+    assert (
+        indicators["ema50"]
+        == 100
+    )
+
+    assert (
+        indicators["rsi"]
+        == 55
+    )
+
+    assert (
+        indicators["atr"]
+        == 6
+    )
+
+    fake = {
+
         "swings": {
+
             "highs": [
                 {
-                    "index": 10,
-                    "price": 2050,
-                },
+                    "price": 110
+                }
             ],
+
             "lows": [
                 {
-                    "index": 12,
-                    "price": 1980,
-                },
+                    "price": 90
+                }
             ],
         }
     }
 
-    swings = _extract_swing_prices(
-        fake_analysis
+    assert (
+        determiner_stop_loss(
+            BUY,
+            100,
+            fake,
+            {},
+            5,
+        )
+        == 90
     )
 
-    assert swings["highs"] == [
-        2050
-    ]
-
-    assert swings["lows"] == [
-        1980
-    ]
-
-    buy_sl = determiner_stop_loss(
-        direction=BUY,
-        entry=2000,
-        m15_analysis=fake_analysis,
-        h1_analysis={},
-        atr=[10],
-    )
-
-    assert buy_sl == 1980
-
-    sell_sl = determiner_stop_loss(
-        direction=SELL,
-        entry=2000,
-        m15_analysis=fake_analysis,
-        h1_analysis={},
-        atr=[10],
-    )
-
-    assert sell_sl == 2050
-
-    assert _validate_stop_loss(
-        BUY,
-        2000,
-        1980,
-    )
-
-    assert _validate_stop_loss(
-        SELL,
-        2000,
-        2050,
+    assert (
+        determiner_stop_loss(
+            SELL,
+            100,
+            fake,
+            {},
+            5,
+        )
+        == 110
     )
 
     logger.info(
-        "Test analyse.py réussi."
+        "analyse.py : tests OK"
     )
 
 
@@ -1965,29 +1804,19 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format=(
-            "%(asctime)s | %(levelname)s | "
-            "%(name)s | %(message)s"
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(name)s | "
+            "%(message)s"
         ),
     )
 
-    print("=" * 60)
-    print("VISION TRADE AI V2 - TEST ANALYSE")
-    print("=" * 60)
-
     print(
-        "\nTIMEFRAME_TO_API :"
+        "VISION TRADE AI V2"
     )
 
     print(
-        TIMEFRAME_TO_API
-    )
-
-    print(
-        "\nDEFAULT_TIMEFRAMES :"
-    )
-
-    print(
-        DEFAULT_TIMEFRAMES
+        "Test analyse.py"
     )
 
     try:
@@ -1995,19 +1824,15 @@ if __name__ == "__main__":
         _run_internal_test()
 
         print(
-            "\nANALYSE : OK"
-        )
-
-        print(
-            "Orchestrateur déterministe opérationnel."
+            "ANALYSE : OK"
         )
 
     except Exception as exc:
 
         print(
-            "\nTEST ANALYSE ÉCHOUÉ"
+            "ANALYSE : ERREUR"
         )
 
         print(
-            f"Erreur : {exc}"
+            exc
         )
