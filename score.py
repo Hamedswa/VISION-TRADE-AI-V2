@@ -11,7 +11,7 @@ Responsabilités :
 - analyser les confluences techniques ;
 - attribuer des points BUY / SELL ;
 - pénaliser les contradictions ;
-- calculer un score final ;
+- calculer un score final sur 100 ;
 - déterminer la qualité du setup.
 IMPORTANT :
 - aucune IA ;
@@ -22,6 +22,10 @@ IMPORTANT :
 La direction est fournie par analyse.py.
 Le score ne fait que mesurer la qualité
 de cette direction.
+SEUIL ACTUEL :
+    50 / 100
+Le score reste toujours calculé sur 100.
+50 est uniquement le seuil minimum d'admissibilité.
 """
 from __future__ import annotations
 import logging
@@ -38,7 +42,9 @@ BULLISH = "bullish"
 BEARISH = "bearish"
 MIN_SCORE = 0
 MAX_SCORE = 100
-DEFAULT_SIGNAL_THRESHOLD = 80
+# Seuil minimum d'admissibilité du setup.
+# Le score reste sur 100.
+DEFAULT_SIGNAL_THRESHOLD = 50
 # ============================================================
 # NORMALISATION DES DIRECTIONS
 # ============================================================
@@ -195,22 +201,17 @@ class ScoreEngine:
     Les pénalités peuvent réduire le score,
     mais ne créent jamais une nouvelle direction.
     La direction est imposée par analyse.py.
+    SEUIL :
+        50 / 100
     """
     WEIGHTS = {
-        "h4_trend":
-            15,
-        "h1_structure":
-            20,
-        "m15_smc":
-            20,
-        "m5_confirmation":
-            15,
-        "fibonacci":
-            10,
-        "indicators":
-            10,
-        "liquidity":
-            10,
+        "h4_trend": 15,
+        "h1_structure": 20,
+        "m15_smc": 20,
+        "m5_confirmation": 15,
+        "fibonacci": 10,
+        "indicators": 10,
+        "liquidity": 10,
     }
     def __init__(
         self,
@@ -1046,25 +1047,25 @@ class ScoreEngine:
     ) -> str:
         """
         Classe la qualité du setup.
-        A+ : >= 90
-        A  : >= 85
-        B  : >= 80
-        C  : >= 70
-        D  : >= 60
-        REJECT : < 60
+        A+ : 90-100
+        A  : 80-89
+        B  : 70-79
+        C  : 60-69
+        D  : 50-59
+        REJECT : < 50
         """
         score = _clamp(
             score
         )
         if score >= 90:
             return "A+"
-        if score >= 85:
-            return "A"
         if score >= 80:
-            return "B"
+            return "A"
         if score >= 70:
-            return "C"
+            return "B"
         if score >= 60:
+            return "C"
+        if score >= 50:
             return "D"
         return "REJECT"
 # ============================================================
@@ -1083,6 +1084,8 @@ def calculer_score(
     """
     Interface publique du moteur de score.
     Compatible avec analyse.py.
+    Le score est toujours sur 100.
+    Le seuil par défaut est 50.
     """
     engine = ScoreEngine(
         threshold=threshold
@@ -1193,14 +1196,11 @@ def _run_internal_test() -> None:
     # H1
     # ========================================================
     h1 = {
-        "bias":
-            "bullish",
+        "bias": "bullish",
         "latest": {
             "bos": {
-                "direction":
-                    "bullish",
-                "break_type":
-                    "BOS",
+                "direction": "bullish",
+                "break_type": "BOS",
             }
         },
     }
@@ -1213,20 +1213,16 @@ def _run_internal_test() -> None:
     # M15
     # ========================================================
     m15 = {
-        "bias":
-            "bullish",
+        "bias": "bullish",
         "latest": {
             "order_block": {
-                "direction":
-                    "bullish",
+                "direction": "bullish",
             },
             "fvg": {
-                "direction":
-                    "bullish",
+                "direction": "bullish",
             },
             "liquidity_sweep": {
-                "direction":
-                    "bullish",
+                "direction": "bullish",
             },
         },
     }
@@ -1249,12 +1245,10 @@ def _run_internal_test() -> None:
     # M5
     # ========================================================
     m5 = {
-        "bias":
-            "bullish",
+        "bias": "bullish",
         "latest": {
             "bos": {
-                "direction":
-                    "bullish",
+                "direction": "bullish",
             }
         },
     }
@@ -1268,12 +1262,10 @@ def _run_internal_test() -> None:
     # ========================================================
     fibonacci = {
         "position": {
-            "zone":
-                "discount",
+            "zone": "discount",
         },
         "closest_level": {
-            "level":
-                "0.705",
+            "level": "0.705",
         },
     }
     fib_score = engine.score_fibonacci(
@@ -1285,12 +1277,9 @@ def _run_internal_test() -> None:
     # INDICATEURS
     # ========================================================
     indicators = {
-        "ema_context":
-            "bullish",
-        "rsi_context":
-            "bullish_bias",
-        "rsi":
-            56,
+        "ema_context": "bullish",
+        "rsi_context": "bullish_bias",
+        "rsi": 56,
     }
     indicator_score = engine.score_indicators(
         indicators,
@@ -1321,9 +1310,10 @@ def _run_internal_test() -> None:
         result["final_score"]
         > 0
     )
+    # Le nouveau seuil est 50.
     assert (
         result["final_score"]
-        >= 80
+        >= 50
     )
     assert (
         result["passes_threshold"]
@@ -1336,6 +1326,10 @@ def _run_internal_test() -> None:
     assert (
         result["confirmations"]
         > 0
+    )
+    assert (
+        result["threshold"]
+        == 50
     )
     logger.info(
         "Test score BUY réussi : %s",
@@ -1365,62 +1359,48 @@ def _run_internal_test() -> None:
     # TEST SELL
     # ========================================================
     sell_h1 = {
-        "bias":
-            "bearish",
+        "bias": "bearish",
         "latest": {
             "bos": {
-                "direction":
-                    "bearish",
-                "break_type":
-                    "BOS",
+                "direction": "bearish",
+                "break_type": "BOS",
             }
         },
     }
     sell_m15 = {
-        "bias":
-            "bearish",
+        "bias": "bearish",
         "latest": {
             "order_block": {
-                "direction":
-                    "bearish",
+                "direction": "bearish",
             },
             "fvg": {
-                "direction":
-                    "bearish",
+                "direction": "bearish",
             },
             "liquidity_sweep": {
-                "direction":
-                    "bearish",
+                "direction": "bearish",
             },
         },
     }
     sell_m5 = {
-        "bias":
-            "bearish",
+        "bias": "bearish",
         "latest": {
             "bos": {
-                "direction":
-                    "bearish",
+                "direction": "bearish",
             }
         },
     }
     sell_fibonacci = {
         "position": {
-            "zone":
-                "premium",
+            "zone": "premium",
         },
         "closest_level": {
-            "level":
-                "0.705",
+            "level": "0.705",
         },
     }
     sell_indicators = {
-        "ema_context":
-            "bearish",
-        "rsi_context":
-            "bearish_bias",
-        "rsi":
-            44,
+        "ema_context": "bearish",
+        "rsi_context": "bearish_bias",
+        "rsi": 44,
     }
     sell_result = calculer_score(
         direction="SELL",
@@ -1445,11 +1425,15 @@ def _run_internal_test() -> None:
     )
     assert (
         sell_result["final_score"]
-        >= 80
+        >= 50
     )
     assert (
         sell_result["passes_threshold"]
         is True
+    )
+    assert (
+        sell_result["threshold"]
+        == 50
     )
     logger.info(
         "Test score SELL réussi : %s",
@@ -1519,7 +1503,7 @@ def _run_internal_test() -> None:
     )
     assert (
         contradiction_result["final_score"]
-        < 80
+        < 50
     )
     assert (
         contradiction_result["contradictions"]
@@ -1531,6 +1515,77 @@ def _run_internal_test() -> None:
     )
     print(
         "CONTRADICTION TEST : OK"
+    )
+    # ========================================================
+    # TEST SEUIL 50
+    # ========================================================
+    threshold_test = calculer_score(
+        direction="BUY",
+        h4_bias="neutral",
+        h1_analysis={},
+        m15_analysis={},
+        m5_analysis={},
+        fibonacci_analysis={},
+        indicators={},
+    )
+    assert (
+        threshold_test["final_score"]
+        == 0
+    )
+    assert (
+        threshold_test["passes_threshold"]
+        is False
+    )
+    assert (
+        threshold_test["threshold"]
+        == 50
+    )
+    # ========================================================
+    # TEST QUALITÉ
+    # ========================================================
+    assert (
+        engine.determine_quality(100)
+        == "A+"
+    )
+    assert (
+        engine.determine_quality(90)
+        == "A+"
+    )
+    assert (
+        engine.determine_quality(89)
+        == "A"
+    )
+    assert (
+        engine.determine_quality(80)
+        == "A"
+    )
+    assert (
+        engine.determine_quality(79)
+        == "B"
+    )
+    assert (
+        engine.determine_quality(70)
+        == "B"
+    )
+    assert (
+        engine.determine_quality(69)
+        == "C"
+    )
+    assert (
+        engine.determine_quality(60)
+        == "C"
+    )
+    assert (
+        engine.determine_quality(59)
+        == "D"
+    )
+    assert (
+        engine.determine_quality(50)
+        == "D"
+    )
+    assert (
+        engine.determine_quality(49)
+        == "REJECT"
     )
     logger.info(
         "Tous les tests score.py sont réussis."
@@ -1555,6 +1610,9 @@ if __name__ == "__main__":
     print(
         "TEST SCORE.PY"
     )
+    print(
+        "SEUIL MINIMUM : 50/100"
+    )
     print("=" * 60)
     try:
         _run_internal_test()
@@ -1564,6 +1622,12 @@ if __name__ == "__main__":
         )
         print(
             "Moteur de scoring déterministe opérationnel."
+        )
+        print(
+            "Score : /100"
+        )
+        print(
+            "Seuil : 50/100"
         )
     except Exception as exc:
         print()
