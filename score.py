@@ -777,42 +777,6 @@ class ScoreEngine:
                 "Structure M15 opposée."
             )
 
-        # ----------------------------------------------------
-        # LIQUIDITY SWEEP
-        # ----------------------------------------------------
-
-        latest_sweep = _safe_dict(
-            latest.get(
-                "liquidity_sweep"
-            )
-        )
-
-        if latest_sweep:
-
-            sweep_direction = _normalize_direction(
-                latest_sweep.get(
-                    "direction"
-                )
-            )
-
-            if sweep_direction == target:
-
-                score += 3
-
-                reasons.append(
-                    "Liquidity sweep aligné."
-                )
-
-            elif (
-                sweep_direction != NEUTRAL.lower()
-            ):
-
-                score -= 3
-
-                reasons.append(
-                    "Liquidity sweep opposé."
-                )
-
         return (
             _clamp_signed(
                 score,
