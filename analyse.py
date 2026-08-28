@@ -16,7 +16,7 @@ Pipeline :
       ↓
     DIRECTION H4/H1/M15
       ↓
-    CONFIRMATION M5
+    CONFIRMATION M5 OBLIGATOIRE
       ↓
     FIBONACCI
       ↓
@@ -32,6 +32,7 @@ Pipeline :
 Règles importantes :
 - H4/H1/M15 déterminent la direction principale.
 - M5 ne peut jamais créer une direction seul.
+- M5 doit confirmer la direction principale avant de continuer.
 - Un timeframe NEUTRAL ne doit pas être forcé.
 - structure.py reste déterministe.
 - score.py reste responsable du score.
@@ -40,7 +41,7 @@ Règles importantes :
 - Fibonacci reçoit toujours une structure normalisée.
 - Aucune logique Telegram ici.
 - Aucune logique Groq ici.
-SEUIL ACTUEL :
+SEUILS :
 - Score minimum : 50/100
 - RR minimum : 1:2
 """
@@ -82,8 +83,7 @@ TIMEFRAMES = (
     "M5",
 )
 # ============================================================
-# IMPORTANT
-# Les seuils viennent maintenant directement de config.py
+# SEUILS
 # ============================================================
 DEFAULT_MIN_SCORE = MIN_SCORE
 DEFAULT_MIN_RR = MIN_RR
@@ -338,33 +338,21 @@ def analyser_timeframe(
     # RESULTAT
     # ========================================================
     return {
-        "timeframe":
+        "timeframe": timeframe,
+        "api_timeframe": TIMEFRAME_TO_API.get(
             timeframe,
-        "api_timeframe":
-            TIMEFRAME_TO_API.get(
-                timeframe,
-                timeframe,
-            ),
-        "candles_count":
-            len(candles),
-        "ema20":
-            ema20,
-        "ema50":
-            ema50,
-        "rsi":
-            rsi,
-        "atr":
-            atr,
-        "structure":
-            structure,
-        "bias":
-            bias,
-        "latest":
-            latest,
-        "fvg":
-            fvg,
-        "order_blocks":
-            order_blocks,
+            timeframe,
+        ),
+        "candles_count": len(candles),
+        "ema20": ema20,
+        "ema50": ema50,
+        "rsi": rsi,
+        "atr": atr,
+        "structure": structure,
+        "bias": bias,
+        "latest": latest,
+        "fvg": fvg,
+        "order_blocks": order_blocks,
     }
 # ============================================================
 # CHARGEMENT MULTI-TIMEFRAME
@@ -472,12 +460,14 @@ def determiner_direction(
             and h1_bias == m15_bias
         ):
             logger.debug(
-                "DIRECTION : H4 NEUTRAL, H1/M15 alignés -> %s",
+                "DIRECTION : H4 NEUTRAL, "
+                "H1/M15 alignés -> %s",
                 h1_bias,
             )
             return h1_bias
         logger.debug(
-            "DIRECTION : H4 NEUTRAL sans confirmation -> NEUTRAL"
+            "DIRECTION : H4 NEUTRAL "
+            "sans confirmation -> NEUTRAL"
         )
         return NEUTRAL
     # ========================================================
@@ -525,8 +515,13 @@ def verifier_confirmation_m5(
     m5: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    M5 confirme la direction.
+    M5 confirme obligatoirement la direction.
+    IMPORTANT :
     M5 ne peut jamais créer une direction.
+    Pour qu'une confirmation soit valide :
+    - la direction principale doit être BUY ou SELL ;
+    - M5 doit fournir au moins une confirmation ;
+    - aucune contradiction M5 ne doit être présente.
     """
     direction = _normalize_direction(
         direction
@@ -539,6 +534,8 @@ def verifier_confirmation_m5(
             "m5_bias": NEUTRAL,
             "confirmed": False,
             "confirmation_type": None,
+            "confirmations": [],
+            "contradiction": False,
             "reason": "NO_MAIN_DIRECTION",
         }
     m5_bias = _extract_bias(m5)
@@ -546,7 +543,10 @@ def verifier_confirmation_m5(
         "latest",
         {},
     )
-    if not isinstance(latest, dict):
+    if not isinstance(
+        latest,
+        dict,
+    ):
         latest = {}
     confirmations = []
     # ========================================================
@@ -612,7 +612,7 @@ def verifier_confirmation_m5(
     if choch_direction == opposite:
         contradiction = True
     # ========================================================
-    # RÉSULTAT
+    # CONFIRMATION
     # ========================================================
     confirmed = (
         len(confirmations) > 0
@@ -623,19 +623,20 @@ def verifier_confirmation_m5(
         if confirmations
         else None
     )
+    if confirmed:
+        reason = "M5_CONFIRMED"
+    elif contradiction:
+        reason = "M5_CONTRADICTION"
+    else:
+        reason = "M5_NO_CONFIRMATION"
     return {
-        "direction":
-            direction,
-        "m5_bias":
-            m5_bias,
-        "confirmed":
-            confirmed,
-        "confirmation_type":
-            confirmation_type,
-        "confirmations":
-            confirmations,
-        "contradiction":
-            contradiction,
+        "direction": direction,
+        "m5_bias": m5_bias,
+        "confirmed": confirmed,
+        "confirmation_type": confirmation_type,
+        "confirmations": confirmations,
+        "contradiction": contradiction,
+        "reason": reason,
     }
 # ============================================================
 # CONTEXTE INDICATEURS
@@ -691,20 +692,13 @@ def construire_contexte_indicateurs(
     else:
         rsi_context = "bearish_bias"
     return {
-        "ema20":
-            ema20,
-        "ema50":
-            ema50,
-        "rsi":
-            rsi,
-        "atr":
-            atr,
-        "ema_context":
-            ema_context,
-        "rsi_context":
-            rsi_context,
-        "direction":
-            direction,
+        "ema20": ema20,
+        "ema50": ema50,
+        "rsi": rsi,
+        "atr": atr,
+        "ema_context": ema_context,
+        "rsi_context": rsi_context,
+        "direction": direction,
     }
 # ============================================================
 # NORMALISATION STRUCTURE POUR FIBONACCI
@@ -712,10 +706,6 @@ def construire_contexte_indicateurs(
 def _normaliser_structure_fibonacci(
     structure_analysis: Any,
 ) -> Dict[str, Any]:
-    """
-    Prépare une structure strictement compatible
-    avec fibonacci.py.
-    """
     if not isinstance(
         structure_analysis,
         dict,
@@ -842,9 +832,6 @@ def construire_fibonacci(
         Dict[str, Any]
     ] = None,
 ) -> Dict[str, Any]:
-    """
-    Construit l'analyse Fibonacci.
-    """
     if not candles:
         logger.warning(
             "Fibonacci : aucune bougie."
@@ -1086,26 +1073,17 @@ def _base_result(
     analyses: Dict[str, Any],
 ) -> Dict[str, Any]:
     return {
-        "status":
-            "REJECT",
-        "symbol":
-            symbol,
-        "direction":
-            direction,
+        "status": "REJECT",
+        "symbol": symbol,
+        "direction": direction,
         "biases": {
-            "H4":
-                h4_bias,
-            "H1":
-                h1_bias,
-            "M15":
-                m15_bias,
-            "M5":
-                m5_bias,
+            "H4": h4_bias,
+            "H1": h1_bias,
+            "M15": m15_bias,
+            "M5": m5_bias,
         },
-        "entry":
-            None,
-        "stop_loss":
-            None,
+        "entry": None,
+        "stop_loss": None,
         "score": {
             "buy_score": 0,
             "sell_score": 0,
@@ -1113,20 +1091,13 @@ def _base_result(
             "direction": direction,
             "quality": "REJECT",
         },
-        "rr":
-            {},
-        "quality":
-            {},
-        "indicators":
-            {},
-        "fibonacci":
-            {},
-        "m5_confirmation":
-            {},
-        "analyses":
-            analyses,
-        "ready_for_signal":
-            False,
+        "rr": {},
+        "quality": {},
+        "indicators": {},
+        "fibonacci": {},
+        "m5_confirmation": {},
+        "analyses": analyses,
+        "ready_for_signal": False,
     }
 # ============================================================
 # ANALYSE PRINCIPALE
@@ -1232,12 +1203,78 @@ def analyser_marche(
     # ========================================================
     if direction == NEUTRAL:
         return {
+            "status": "NO_DIRECTION",
+            "symbol": symbol,
+            "direction": NEUTRAL,
+            "biases": {
+                "H4": h4_bias,
+                "H1": h1_bias,
+                "M15": m15_bias,
+                "M5": m5_bias,
+            },
+            "entry": None,
+            "stop_loss": None,
+            "score": {
+                "final_score": 0,
+                "minimum_required":
+                    DEFAULT_MIN_SCORE,
+            },
+            "rr": {},
+            "quality": {},
+            "indicators": {},
+            "fibonacci": {},
+            "m5_confirmation": {
+                "confirmed": False,
+                "reason": "NO_MAIN_DIRECTION",
+            },
+            "analyses": analyses,
+            "ready_for_signal": False,
+        }
+    # ========================================================
+    # M5 — CONFIRMATION OBLIGATOIRE
+    # ========================================================
+    m5_confirmation = (
+        verifier_confirmation_m5(
+            direction,
+            m5,
+        )
+    )
+    logger.info(
+        "M5 CONFIRMATION : confirmed=%s | "
+        "type=%s | reason=%s | contradiction=%s",
+        m5_confirmation.get(
+            "confirmed",
+            False,
+        ),
+        m5_confirmation.get(
+            "confirmation_type"
+        ),
+        m5_confirmation.get(
+            "reason"
+        ),
+        m5_confirmation.get(
+            "contradiction",
+            False,
+        ),
+    )
+    # ========================================================
+    # BLOCAGE SI M5 NE CONFIRME PAS
+    # ========================================================
+    if not m5_confirmation.get(
+        "confirmed",
+        False,
+    ):
+        logger.info(
+            "SIGNAL REJETÉ : "
+            "M5 ne confirme pas la direction principale."
+        )
+        return {
             "status":
-                "NO_DIRECTION",
+                "M5_NOT_CONFIRMED",
             "symbol":
                 symbol,
             "direction":
-                NEUTRAL,
+                direction,
             "biases": {
                 "H4":
                     h4_bias,
@@ -1253,9 +1290,12 @@ def analyser_marche(
             "stop_loss":
                 None,
             "score": {
-                "final_score": 0,
+                "final_score":
+                    0,
                 "minimum_required":
                     DEFAULT_MIN_SCORE,
+                "reason":
+                    "M5_CONFIRMATION_REQUIRED",
             },
             "rr":
                 {},
@@ -1266,24 +1306,18 @@ def analyser_marche(
             "fibonacci":
                 {},
             "m5_confirmation":
-                {
-                    "confirmed":
-                        False
-                },
+                m5_confirmation,
             "analyses":
                 analyses,
             "ready_for_signal":
                 False,
+            "thresholds": {
+                "minimum_score":
+                    DEFAULT_MIN_SCORE,
+                "minimum_rr":
+                    DEFAULT_MIN_RR,
+            },
         }
-    # ========================================================
-    # M5
-    # ========================================================
-    m5_confirmation = (
-        verifier_confirmation_m5(
-            direction,
-            m5,
-        )
-    )
     # ========================================================
     # INDICATEURS M15
     # ========================================================
@@ -1397,7 +1431,8 @@ def analyser_marche(
         )
     )
     logger.info(
-        "SCORE FINAL : %.2f / 100 | MINIMUM : %s / 100",
+        "SCORE FINAL : %.2f / 100 | "
+        "MINIMUM : %s / 100",
         final_score,
         DEFAULT_MIN_SCORE,
     )
@@ -1632,7 +1667,11 @@ def analyser_marche(
         "REJECT",
     )
     logger.info(
-        "RÉSULTAT : status=%s | direction=%s | score=%.2f | seuil=%s | ready=%s",
+        "RÉSULTAT : status=%s | "
+        "direction=%s | "
+        "score=%.2f | "
+        "seuil=%s | "
+        "ready=%s",
         status,
         direction,
         final_score,
@@ -2044,6 +2083,50 @@ def _run_internal_test():
         )
         is False
     )
+    # ========================================================
+    # CONFIRMATION M5
+    # ========================================================
+    # M5 confirme BUY avec son bias
+    confirmation = verifier_confirmation_m5(
+        BUY,
+        {
+            "bias": BUY,
+            "latest": {},
+        },
+    )
+    assert confirmation["confirmed"] is True
+    assert "M5_BIAS" in confirmation["confirmations"]
+    # M5 ne confirme pas si NEUTRAL
+    confirmation = verifier_confirmation_m5(
+        BUY,
+        {
+            "bias": NEUTRAL,
+            "latest": {},
+        },
+    )
+    assert confirmation["confirmed"] is False
+    assert confirmation["reason"] == "M5_NO_CONFIRMATION"
+    # M5 contredit BUY avec SELL
+    confirmation = verifier_confirmation_m5(
+        BUY,
+        {
+            "bias": SELL,
+            "latest": {},
+        },
+    )
+    assert confirmation["confirmed"] is False
+    assert confirmation["contradiction"] is True
+    assert confirmation["reason"] == "M5_CONTRADICTION"
+    # M5 ne peut pas créer une direction
+    confirmation = verifier_confirmation_m5(
+        NEUTRAL,
+        {
+            "bias": BUY,
+            "latest": {},
+        },
+    )
+    assert confirmation["confirmed"] is False
+    assert confirmation["reason"] == "NO_MAIN_DIRECTION"
     logger.info(
         "analyse.py : tests OK"
     )
@@ -2074,10 +2157,15 @@ if __name__ == "__main__":
             "ANALYSE : OK"
         )
         print(
-            f"SCORE MINIMUM : {DEFAULT_MIN_SCORE}/100"
+            f"SCORE MINIMUM : "
+            f"{DEFAULT_MIN_SCORE}/100"
         )
         print(
-            f"RR MINIMUM : 1:{DEFAULT_MIN_RR}"
+            f"RR MINIMUM : "
+            f"1:{DEFAULT_MIN_RR}"
+        )
+        print(
+            "M5 CONFIRMATION : OBLIGATOIRE"
         )
     except Exception as exc:
         print(
