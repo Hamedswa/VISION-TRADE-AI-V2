@@ -86,15 +86,15 @@ ATR_PERIOD = 14
 # ============================================================
 
 # Score minimum permettant de poursuivre l'analyse.
-MIN_SCORE = 70
+MIN_SCORE = 50
 
 # Score recommandé pour générer un signal.
-SIGNAL_SCORE = 80
+SIGNAL_SCORE = 50
 
 # Classification des setups.
 SCORE_A_PLUS = 90
 SCORE_A = 80
-SCORE_B = 70
+SCORE_B = 50
 
 
 # ============================================================
