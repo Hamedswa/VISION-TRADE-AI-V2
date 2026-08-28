@@ -349,24 +349,178 @@ class ScoreEngine:
     # ========================================================
 
     def score_h1_structure(
-        self,
-        h1_analysis: Dict[str, Any],
-        direction: str,
-    ) -> tuple[int, list[str]]:
+    self,
+    h1_analysis: Dict[str, Any],
+    direction: str,
+) -> tuple[int, list[str]]:
 
-        h1_analysis = _safe_dict(
-            h1_analysis
+    h1_analysis = _safe_dict(
+        h1_analysis
+    )
+
+    target = _normalize_direction(
+        direction
+    )
+
+    if target == NEUTRAL.lower():
+        return 0, []
+
+    score = 0
+    reasons = []
+
+    # ----------------------------------------------------
+    # BIAIS H1
+    # ----------------------------------------------------
+
+    bias = _normalize_direction(
+        h1_analysis.get(
+            "bias",
+            NEUTRAL,
+        )
+    )
+
+    if bias == target:
+
+        score += 10
+
+        reasons.append(
+            "Biais H1 aligné."
         )
 
-        target = _normalize_direction(
-            direction
+    elif (
+        bias != NEUTRAL.lower()
+        and bias != target
+    ):
+
+        score -= 10
+
+        reasons.append(
+            "Biais H1 opposé."
         )
 
-        if target == NEUTRAL.lower():
-            return 0, []
+    # ----------------------------------------------------
+    # LATEST
+    # ----------------------------------------------------
 
-        score = 0
-        reasons = []
+    latest = _safe_dict(
+        h1_analysis.get(
+            "latest",
+            {},
+        )
+    )
+
+    # ----------------------------------------------------
+    # BOS H1
+    # ----------------------------------------------------
+
+    bos = _safe_dict(
+        latest.get(
+            "bos"
+        )
+    )
+
+    if bos:
+
+        bos_direction = _normalize_direction(
+            bos.get(
+                "direction"
+            )
+        )
+
+        if bos_direction == target:
+
+            score += 10
+
+            reasons.append(
+                "BOS H1 aligné."
+            )
+
+        elif (
+            bos_direction != NEUTRAL.lower()
+        ):
+
+            # ------------------------------------------------
+            # Si le biais H1 est déjà opposé,
+            # le BOS confirme la contradiction.
+            #
+            # Si le biais H1 est NEUTRAL,
+            # on applique seulement une pénalité modérée.
+            # ------------------------------------------------
+
+            if bias == NEUTRAL.lower():
+
+                score -= 5
+
+                reasons.append(
+                    "BOS H1 contraire dans un contexte H1 neutre."
+                )
+
+            else:
+
+                score -= 10
+
+                reasons.append(
+                    "BOS H1 opposé."
+                )
+
+    # ----------------------------------------------------
+    # CHOCH H1
+    # ----------------------------------------------------
+
+    choch = _safe_dict(
+        latest.get(
+            "choch"
+        )
+    )
+
+    if choch:
+
+        choch_direction = _normalize_direction(
+            choch.get(
+                "direction"
+            )
+        )
+
+        if choch_direction == target:
+
+            score += 5
+
+            reasons.append(
+                "CHoCH H1 aligné."
+            )
+
+        elif (
+            choch_direction != NEUTRAL.lower()
+        ):
+
+            # ------------------------------------------------
+            # Même logique que pour le BOS.
+            # ------------------------------------------------
+
+            if bias == NEUTRAL.lower():
+
+                score -= 3
+
+                reasons.append(
+                    "CHoCH H1 contraire dans un contexte H1 neutre."
+                )
+
+            else:
+
+                score -= 5
+
+                reasons.append(
+                    "CHoCH H1 opposé."
+                )
+
+    return (
+        _clamp_signed(
+            score,
+            -self.WEIGHTS["h1_structure"],
+            self.WEIGHTS["h1_structure"],
+        ),
+        reasons,
+    )
 
         # ----------------------------------------------------
         # BIAIS H1
